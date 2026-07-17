@@ -4,6 +4,7 @@ set -eu
 archive="${TEST_SRCDIR}/_main/fixture_runfiles_exec_tar.tar"
 empty_archive="${TEST_SRCDIR}/_main/fixture_empty_runfiles_tar.tar"
 listing="$(tar -tf "${archive}")"
+empty_listing="$(tar -tf "${empty_archive}")"
 
 for path in \
   opt/selamy/bin/runfiles-exec \
@@ -20,7 +21,8 @@ for path in \
   opt/selamy/bin/runfiles-empty.runfiles/_main/test/__init__.py \
   opt/selamy/bin/runfiles-empty.runfiles/_main/test/fixtures/__init__.py
 do
-  size="$(tar -tvf "${empty_archive}" "${path}" | awk '{print $3}')"
+  printf '%s\n' "${empty_listing}" | grep -Fxq "${path}"
+  size="$(tar -xOf "${empty_archive}" "${path}" | wc -c | tr -d '[:space:]')"
   test "${size}" = 0
 done
 
