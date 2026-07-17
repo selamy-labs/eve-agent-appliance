@@ -15,7 +15,11 @@ bazel_dep(name = "eve_agent_appliance", version = "0.1.0")
 ```
 
 ```starlark
-load("@eve_agent_appliance//appliance:defs.bzl", "agent_appliance")
+load(
+    "@eve_agent_appliance//appliance:defs.bzl",
+    "agent_appliance",
+    "capability_digest_evidence",
+)
 
 agent_appliance(
     name = "appliance",
@@ -26,10 +30,20 @@ agent_appliance(
         "price-normalizer": "//capabilities/price-normalizer",
     },
 )
+
+capability_digest_evidence(
+    name = "capability_digest",
+    appliance = ":appliance",
+    image_digest = ":image.digest",
+)
 ```
 
 The rule emits canonical manifest JSON, a trusted binding manifest, and a
-sanitized model-visible catalog. Validation fails closed on unknown fields,
+sanitized model-visible catalog. Package `:appliance_runtime_artifacts` (or
+the individual `:appliance_catalog` and `:appliance_binding` targets), never
+the aggregate rule or `:appliance_manifest`. The separate
+`:capability_digest` output is generated after the image digest exists and must
+remain outside every image layer. Validation fails closed on unknown fields,
 closed-enum violations, invalid mode/protocol combinations, undeclared or
 unused bindings, and authority-bearing values disguised as logical names.
 

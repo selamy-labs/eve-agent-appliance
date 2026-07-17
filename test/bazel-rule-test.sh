@@ -11,6 +11,7 @@ done
 
 catalog="$(cat "${root}/example_appliance.catalog.json")"
 binding="$(cat "${root}/example_appliance.binding.json")"
+evidence="$(cat "${root}/example_capability_digest.json")"
 
 [[ "${catalog}" == *'nova.price-normalizer.v1'* ]]
 [[ "${catalog}" != *'/opt/selamy/'* ]]
@@ -18,3 +19,6 @@ binding="$(cat "${root}/example_appliance.binding.json")"
 [[ "${binding}" == *'/opt/selamy/bin/price-normalizer'* ]]
 [[ "${binding}" == *'//:fixture_price_normalizer'* ]]
 [[ "${binding}" != *'imageDigest'* ]]
+[[ "${evidence}" == *'nova.price-normalizer.v1'* ]]
+[[ "${evidence}" == *'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'* ]]
+[[ "${evidence}" != *'/opt/selamy/'* ]]

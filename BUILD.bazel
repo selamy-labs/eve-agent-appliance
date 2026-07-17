@@ -1,6 +1,6 @@
 load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_library", "js_test")
 load("@eve_agent_appliance_npm//:defs.bzl", "npm_link_all_packages")
-load("//appliance:defs.bzl", "agent_appliance")
+load("//appliance:defs.bzl", "agent_appliance", "capability_digest_evidence")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -22,6 +22,18 @@ js_binary(
         ":node_modules/yaml",
     ],
     entry_point = "src/generate.mjs",
+)
+
+js_library(
+    name = "digest_evidence_lib",
+    srcs = ["src/digest-evidence.mjs"],
+    deps = [":generator_lib"],
+)
+
+js_binary(
+    name = "capability_digest_generator",
+    data = [":digest_evidence_lib"],
+    entry_point = "src/digest-evidence.mjs",
 )
 
 js_test(
@@ -46,6 +58,15 @@ js_test(
     entry_point = "test/actions-cache-cleanup.test.mjs",
 )
 
+js_test(
+    name = "digest_evidence_test",
+    data = [
+        ":digest_evidence_lib",
+        ":generator_lib",
+    ],
+    entry_point = "test/digest-evidence.test.mjs",
+)
+
 filegroup(
     name = "fixture_eve_runtime",
     srcs = ["test/fixtures/eve-runtime.txt"],
@@ -66,10 +87,21 @@ agent_appliance(
     },
 )
 
+capability_digest_evidence(
+    name = "example_capability_digest",
+    appliance = ":example_appliance",
+    image_digest = "test/fixtures/image-digest.txt",
+)
+
 sh_test(
     name = "bazel_rule_test",
     srcs = ["test/bazel-rule-test.sh"],
-    data = [":example_appliance"],
+    data = [
+        ":example_appliance_binding",
+        ":example_appliance_catalog",
+        ":example_appliance_manifest",
+        ":example_capability_digest",
+    ],
 )
 
 exports_files([

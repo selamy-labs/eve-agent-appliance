@@ -69,9 +69,14 @@ def _agent_appliance_impl(ctx):
         tools = [ctx.attr._generator[DefaultInfo].files_to_run],
     )
 
-    outputs = depset([catalog, binding, canonical_manifest])
     return [
-        DefaultInfo(files = outputs),
+        DefaultInfo(files = depset()),
+        OutputGroupInfo(
+            appliance_binding = depset([binding]),
+            appliance_catalog = depset([catalog]),
+            appliance_manifest = depset([canonical_manifest]),
+            appliance_runtime_artifacts = depset([catalog, binding]),
+        ),
         ApplianceInfo(
             binding = binding,
             canonical_manifest = canonical_manifest,
@@ -120,3 +125,65 @@ def agent_appliance(name, agent_name, manifest, bindings, visibility = None, tag
         tags = tags,
         visibility = visibility,
     )
+    native.filegroup(
+        name = name + "_binding",
+        srcs = [":" + name],
+        output_group = "appliance_binding",
+        tags = tags,
+        visibility = visibility,
+    )
+    native.filegroup(
+        name = name + "_catalog",
+        srcs = [":" + name],
+        output_group = "appliance_catalog",
+        tags = tags,
+        visibility = visibility,
+    )
+    native.filegroup(
+        name = name + "_manifest",
+        srcs = [":" + name],
+        output_group = "appliance_manifest",
+        tags = tags,
+        visibility = visibility,
+    )
+    native.filegroup(
+        name = name + "_runtime_artifacts",
+        srcs = [":" + name],
+        output_group = "appliance_runtime_artifacts",
+        tags = tags,
+        visibility = visibility,
+    )
+
+
+def _capability_digest_evidence_impl(ctx):
+    appliance = ctx.attr.appliance[ApplianceInfo]
+    evidence = ctx.actions.declare_file(ctx.label.name + ".json")
+    args = ctx.actions.args()
+    args.add("--binding-manifest", appliance.binding)
+    args.add("--image-digest", ctx.file.image_digest)
+    args.add("--output", evidence)
+    ctx.actions.run(
+        arguments = [args],
+        env = {"BAZEL_BINDIR": "."},
+        executable = ctx.executable._generator,
+        inputs = [appliance.binding, ctx.file.image_digest],
+        mnemonic = "CapabilityDigestEvidence",
+        outputs = [evidence],
+        progress_message = "Correlating capability and image digests for %{label}",
+        tools = [ctx.attr._generator[DefaultInfo].files_to_run],
+    )
+    return [DefaultInfo(files = depset([evidence]))]
+
+
+capability_digest_evidence = rule(
+    implementation = _capability_digest_evidence_impl,
+    attrs = {
+        "appliance": attr.label(mandatory = True, providers = [ApplianceInfo]),
+        "image_digest": attr.label(allow_single_file = True, mandatory = True),
+        "_generator": attr.label(
+            cfg = "exec",
+            default = Label("//:capability_digest_generator"),
+            executable = True,
+        ),
+    },
+)
