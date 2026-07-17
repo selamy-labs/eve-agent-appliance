@@ -60,6 +60,7 @@ function parsePax(bytes) {
       throw new TypeError("invalid PAX record boundary");
     }
     const record = bytes.subarray(space + 1, offset + length - 1).toString("utf8");
+    if (bytes[offset + length - 1] !== 0x0a) throw new TypeError("invalid PAX record terminator");
     const equals = record.indexOf("=");
     if (equals <= 0) throw new TypeError("invalid PAX record");
     attributes[record.slice(0, equals)] = record.slice(equals + 1);
@@ -68,32 +69,53 @@ function parsePax(bytes) {
   return attributes;
 }
 
-function applyWhiteout(files, path) {
+function paxInteger(pax, key, fallback) {
+  if (pax[key] === undefined) return fallback;
+  if (!/^(0|[1-9][0-9]*)$/.test(pax[key])) throw new TypeError(`invalid PAX ${key}`);
+  const value = Number(pax[key]);
+  if (!Number.isSafeInteger(value)) throw new TypeError(`invalid PAX ${key}`);
+  return value;
+}
+
+function applyWhiteout(files, lowerPaths, upperPaths, path) {
   const parts = path.split("/");
   const name = parts.pop();
   const directory = parts.join("/");
   if (name === ".wh..wh..opq") {
     const prefix = directory ? `${directory}/` : "";
-    for (const candidate of files.keys()) if (candidate.startsWith(prefix)) files.delete(candidate);
+    for (const candidate of lowerPaths) {
+      if (candidate.startsWith(prefix) && !upperPaths.has(candidate)) files.delete(candidate);
+    }
     return true;
   }
   if (!name.startsWith(".wh.")) return false;
   const target = [...parts, name.slice(4)].filter(Boolean).join("/");
-  files.delete(target);
-  for (const candidate of files.keys()) if (candidate.startsWith(`${target}/`)) files.delete(candidate);
+  for (const candidate of lowerPaths) {
+    if ((candidate === target || candidate.startsWith(`${target}/`)) && !upperPaths.has(candidate)) {
+      files.delete(candidate);
+    }
+  }
   return true;
 }
 
-function replaceEntry(files, path, entry) {
+function replaceEntry(files, upperPaths, path, entry) {
   if (entry.kind !== "directory") {
-    for (const candidate of files.keys()) if (candidate.startsWith(`${path}/`)) files.delete(candidate);
+    for (const candidate of files.keys()) {
+      if (candidate.startsWith(`${path}/`)) {
+        files.delete(candidate);
+        upperPaths.delete(candidate);
+      }
+    }
   }
   files.set(path, entry);
+  upperPaths.add(path);
 }
 
 function applyTarLayer(files, archive) {
   let offset = 0;
   let pax = {};
+  const lowerPaths = new Set(files.keys());
+  const upperPaths = new Set();
   while (offset + BLOCK_SIZE <= archive.length) {
     const header = archive.subarray(offset, offset + BLOCK_SIZE);
     if (header.every((byte) => byte === 0)) return;
@@ -115,20 +137,32 @@ function applyTarLayer(files, archive) {
       pax = parsePax(bytes);
       continue;
     }
+    if (type === "g") throw new TypeError("global PAX headers are unsupported");
+    for (const key of Object.keys(pax)) {
+      if (!["gid", "path", "uid"].includes(key)) throw new TypeError(`unsupported PAX attribute ${key}`);
+    }
     const path = normalizeImagePath(rawPath);
+    const effectiveUid = paxInteger(pax, "uid", uid);
+    const effectiveGid = paxInteger(pax, "gid", gid);
     pax = {};
-    if (applyWhiteout(files, path)) continue;
+    if (applyWhiteout(files, lowerPaths, upperPaths, path)) continue;
     if (type === "\0" || type === "0" || type === "7") {
-      replaceEntry(files, path, { kind: "regular", bytes: Buffer.from(bytes), gid, mode, uid });
+      replaceEntry(files, upperPaths, path, {
+        kind: "regular",
+        bytes: Buffer.from(bytes),
+        gid: effectiveGid,
+        mode,
+        uid: effectiveUid,
+      });
     } else if (type === "1") {
-      replaceEntry(files, path, { kind: "hardlink" });
+      replaceEntry(files, upperPaths, path, { kind: "hardlink" });
     } else if (type === "2") {
-      replaceEntry(files, path, { kind: "symlink" });
+      replaceEntry(files, upperPaths, path, { kind: "symlink" });
     } else if (type === "5") {
-      replaceEntry(files, path, { kind: "directory" });
+      replaceEntry(files, upperPaths, path, { kind: "directory" });
     } else if (["3", "4", "6"].includes(type)) {
-      replaceEntry(files, path, { kind: "special" });
-    } else if (type !== "g") {
+      replaceEntry(files, upperPaths, path, { kind: "special" });
+    } else {
       throw new TypeError(`unsupported tar entry type ${JSON.stringify(type)} for ${path}`);
     }
   }
@@ -203,6 +237,15 @@ export async function verifyOciImage(layout, requiredFiles, expectedPlatform) {
       `OCI image platform ${String(config.os)}/${String(config.architecture)} does not match expected ${os}/${architecture}`,
     );
   }
+  if (!config.rootfs || typeof config.rootfs !== "object" || Array.isArray(config.rootfs)) {
+    throw new TypeError("image config rootfs must be an object");
+  }
+  if (config.rootfs.type !== "layers" || !Array.isArray(config.rootfs.diff_ids)) {
+    throw new TypeError("image config rootfs must declare layers and diff_ids");
+  }
+  if (config.rootfs.diff_ids.length !== manifest.layers.length) {
+    throw new TypeError("image config rootfs.diff_ids must match the manifest layer count");
+  }
 
   const files = new Map();
   for (const [index, descriptor] of manifest.layers.entries()) {
@@ -213,6 +256,8 @@ export async function verifyOciImage(layout, requiredFiles, expectedPlatform) {
     let archive;
     if (descriptor.mediaType.endsWith("+gzip")) archive = gunzipSync(compressed);
     else archive = compressed;
+    const expectedDiffId = requireDigest(config.rootfs.diff_ids[index], `rootfs.diff_ids[${index}]`);
+    if (sha256(archive) !== expectedDiffId) throw new TypeError(`rootfs.diff_ids[${index}] does not match layer contents`);
     applyTarLayer(files, archive);
   }
 

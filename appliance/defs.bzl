@@ -90,6 +90,14 @@ def _runfile_destination(logical_name, relative):
     return "opt/selamy/bin/%s.runfiles/%s" % (logical_name, relative)
 
 
+def _empty_runfile_relative_path(path):
+    if path.startswith("../"):
+        return path[3:]
+    if path.startswith("_main/"):
+        return path
+    return "_main/" + path
+
+
 def _package_files(dest_src_map, mode):
     return PackageFilesInfo(
         attributes = {
@@ -180,8 +188,6 @@ def _appliance_binding_impl(ctx):
         direct_runtime_files.extend([entry.target_file for entry in runfiles.root_symlinks.to_list()])
     if repo_mapping != None:
         direct_runtime_files.append(repo_mapping)
-    runtime_files = depset(direct_runtime_files, transitive = transitive_runfiles)
-
     executable_path = "opt/selamy/bin/%s" % logical_name
     image_files = {executable_path: executable}
     image_modes = {executable_path: _RUNTIME_MODE}
@@ -199,10 +205,29 @@ def _appliance_binding_impl(ctx):
             destination = _runfile_destination(logical_name, entry.path)
             if _add_image_file(image_files, image_modes, destination, entry.target_file, _RUNTIME_MODE, "binding %s" % logical_name):
                 runfile_paths[destination] = entry.target_file
+    empty_index = 0
+    empty_destinations = {}
+    for runfiles in runfiles_sets:
+        for empty_path in runfiles.empty_filenames.to_list():
+            destination = _runfile_destination(logical_name, _empty_runfile_relative_path(empty_path))
+            if destination in empty_destinations:
+                continue
+            if destination in image_files:
+                fail("binding %s maps an empty runfile over %s" % (logical_name, destination))
+            empty_file = ctx.actions.declare_file("%s.empty-runfile-%d" % (ctx.label.name, empty_index))
+            empty_index += 1
+            ctx.actions.write(empty_file, "")
+            image_files[destination] = empty_file
+            image_modes[destination] = _RUNTIME_MODE
+            runfile_paths[destination] = empty_file
+            direct_runtime_files.append(empty_file)
+            empty_destinations[destination] = True
     if repo_mapping != None:
         repo_mapping_path = _runfile_destination(logical_name, "_repo_mapping")
         if _add_image_file(image_files, image_modes, repo_mapping_path, repo_mapping, _RUNTIME_MODE, "binding %s" % logical_name):
             runfile_paths[repo_mapping_path] = repo_mapping
+
+    runtime_files = depset(direct_runtime_files, transitive = transitive_runfiles)
 
     package_files = [
         (_package_files({executable_path: executable}, _RUNTIME_MODE), ctx.label),
@@ -501,12 +526,23 @@ def _appliance_image_impl(ctx):
     layout_files = ctx.attr.layout[DefaultInfo].files.to_list()
     if len(layout_files) != 1 or not layout_files[0].is_directory:
         fail("layout must be one rules_oci OCI-layout tree artifact")
+    validated_layout = ctx.actions.declare_directory(ctx.label.name + ".validated-layout")
+    ctx.actions.run(
+        arguments = [layout_files[0].path, appliance.canonical_manifest.path, validated_layout.path],
+        env = {"BAZEL_BINDIR": "."},
+        executable = ctx.executable._validated_layout,
+        inputs = [layout_files[0], appliance.canonical_manifest],
+        mnemonic = "ValidatedApplianceLayout",
+        outputs = [validated_layout],
+        progress_message = "Binding validated appliance manifest to OCI layout for %{label}",
+        tools = [ctx.attr._validated_layout[DefaultInfo].files_to_run],
+    )
     return [
-        DefaultInfo(files = depset(layout_files)),
+        DefaultInfo(files = depset([validated_layout])),
         _ApplianceImageInfo(
             appliance = appliance,
             appliance_label = str(ctx.attr.appliance.label),
-            layout = layout_files[0],
+            layout = validated_layout,
         ),
     ]
 
@@ -527,6 +563,11 @@ _appliance_image = rule(
             providers = [_PlatformConstraintCheckInfo],
         ),
         "target_platform": attr.label(mandatory = True, providers = [platform_common.PlatformInfo]),
+        "_validated_layout": attr.label(
+            cfg = "exec",
+            default = Label("//:validated_appliance_layout"),
+            executable = True,
+        ),
     },
 )
 

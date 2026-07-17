@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
+import { gzipSync } from "node:zlib";
 import { generateDigestEvidence, verifyOciImage } from "../src/digest-evidence.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -63,6 +64,13 @@ function tarEntry(path, bytes = Buffer.alloc(0), mode = 0o444, type = "0", linkP
   return Buffer.concat([header, bytes, padding]);
 }
 
+function paxRecord(key, value) {
+  const body = `${key}=${value}\n`;
+  let length = body.length + 2;
+  while (`${length} ${body}`.length !== length) length = `${length} ${body}`.length;
+  return Buffer.from(`${length} ${body}`);
+}
+
 function digest(bytes) {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 }
@@ -80,14 +88,22 @@ async function ociFixture(layers, options = {}) {
     imageLayoutVersion: options.layoutVersion ?? "1.0.0",
   }));
   const layerDescriptors = [];
-  for (const entries of layers) {
-    const layer = Buffer.concat([...entries, Buffer.alloc(1024)]);
-    const descriptor = await writeBlob(layout, layer);
-    layerDescriptors.push({ ...descriptor, mediaType: "application/vnd.oci.image.layer.v1.tar" });
+  const diffIds = [];
+  for (const [index, entries] of layers.entries()) {
+    const archive = Buffer.concat([...entries, Buffer.alloc(1024)]);
+    const mediaType = options.layerMediaTypes?.[index] ?? "application/vnd.oci.image.layer.v1.tar";
+    const blob = mediaType.endsWith("+gzip") ? gzipSync(archive, { mtime: 0 }) : archive;
+    const descriptor = await writeBlob(layout, blob);
+    layerDescriptors.push({ ...descriptor, mediaType });
+    diffIds.push(digest(archive));
   }
   const config = options.configBytes ?? Buffer.from(JSON.stringify({
     architecture: options.architecture ?? "amd64",
     os: options.os ?? "linux",
+    rootfs: {
+      diff_ids: options.diffIds ?? diffIds,
+      type: "layers",
+    },
   }));
   const configDescriptor = await writeBlob(layout, config);
   const manifest = Buffer.from(JSON.stringify({
@@ -214,6 +230,95 @@ test("whiteouts still remove lower regular files", async () => {
       rm(layout, { recursive: true, force: true }),
       rm(sourceDir, { recursive: true, force: true }),
     ]);
+  }
+});
+
+test("a whiteout never erases a replacement created in the same layer", async () => {
+  const sourceDir = await mkdtemp(join(tmpdir(), "eve-appliance-source-"));
+  const sourceFile = join(sourceDir, "runtime");
+  const replacement = Buffer.from("replacement\n");
+  await writeFile(sourceFile, replacement);
+  const { imageDigest: expected, layout } = await ociFixture([
+    [tarEntry("opt/selamy/bin/runtime", Buffer.from("lower\n"), 0o555)],
+    [
+      tarEntry("opt/selamy/bin/runtime", replacement, 0o555),
+      tarEntry("opt/selamy/bin/.wh.runtime"),
+    ],
+  ]);
+  try {
+    assert.equal(
+      await verifyOciImage(layout, [{ expectedMode: "0555", imagePath: "/opt/selamy/bin/runtime", sourceFile }], expectedPlatform),
+      expected,
+    );
+  } finally {
+    await Promise.all([
+      rm(layout, { recursive: true, force: true }),
+      rm(sourceDir, { recursive: true, force: true }),
+    ]);
+  }
+});
+
+test("binds config rootfs diff_ids to each uncompressed layer", async () => {
+  const mismatch = await ociFixture([[tarEntry("runtime", Buffer.from("runtime\n"))]], {
+    diffIds: [`sha256:${"0".repeat(64)}`],
+  });
+  try {
+    await assert.rejects(verifyOciImage(mismatch.layout, [], expectedPlatform), /rootfs\.diff_ids\[0\]/);
+  } finally {
+    await rm(mismatch.layout, { recursive: true, force: true });
+  }
+
+  const gzip = await ociFixture([[tarEntry("runtime", Buffer.from("runtime\n"))]], {
+    layerMediaTypes: ["application/vnd.oci.image.layer.v1.tar+gzip"],
+  });
+  try {
+    assert.equal(await verifyOciImage(gzip.layout, [], expectedPlatform), gzip.imageDigest);
+  } finally {
+    await rm(gzip.layout, { recursive: true, force: true });
+  }
+});
+
+test("honors local PAX ownership overrides", async () => {
+  const sourceDir = await mkdtemp(join(tmpdir(), "eve-appliance-source-"));
+  const sourceFile = join(sourceDir, "runtime");
+  const source = Buffer.from("runtime\n");
+  await writeFile(sourceFile, source);
+  const pax = Buffer.concat([paxRecord("uid", "0"), paxRecord("gid", "0")]);
+  const { layout } = await ociFixture([[
+    tarEntry("PaxHeader/runtime", pax, 0o444, "x"),
+    tarEntry("opt/selamy/bin/runtime", source, 0o555),
+  ]]);
+  try {
+    await assert.rejects(
+      verifyOciImage(layout, [{ expectedMode: "0555", imagePath: "/opt/selamy/bin/runtime", sourceFile }], expectedPlatform),
+      /unexpected mode or ownership/,
+    );
+  } finally {
+    await Promise.all([
+      rm(layout, { recursive: true, force: true }),
+      rm(sourceDir, { recursive: true, force: true }),
+    ]);
+  }
+});
+
+test("explicitly rejects unsupported layer media types and global PAX headers", async () => {
+  const zstd = await ociFixture([[]], {
+    layerMediaTypes: ["application/vnd.oci.image.layer.v1.tar+zstd"],
+  });
+  try {
+    await assert.rejects(verifyOciImage(zstd.layout, [], expectedPlatform), /unsupported media type/);
+  } finally {
+    await rm(zstd.layout, { recursive: true, force: true });
+  }
+
+  const globalPax = await ociFixture([[
+    tarEntry("GlobalHead", paxRecord("uid", "0"), 0o444, "g"),
+    tarEntry("runtime", Buffer.from("runtime\n")),
+  ]]);
+  try {
+    await assert.rejects(verifyOciImage(globalPax.layout, [], expectedPlatform), /global PAX/);
+  } finally {
+    await rm(globalPax.layout, { recursive: true, force: true });
   }
 });
 

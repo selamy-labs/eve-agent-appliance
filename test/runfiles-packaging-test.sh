@@ -2,6 +2,7 @@
 set -eu
 
 archive="${TEST_SRCDIR}/_main/fixture_runfiles_exec_tar.tar"
+empty_archive="${TEST_SRCDIR}/_main/fixture_empty_runfiles_tar.tar"
 listing="$(tar -tf "${archive}")"
 
 for path in \
@@ -13,6 +14,14 @@ for path in \
   opt/selamy/bin/runfiles-exec.runfiles/_repo_mapping
 do
   printf '%s\n' "${listing}" | grep -Fxq "${path}"
+done
+
+for path in \
+  opt/selamy/bin/runfiles-empty.runfiles/_main/test/__init__.py \
+  opt/selamy/bin/runfiles-empty.runfiles/_main/test/fixtures/__init__.py
+do
+  size="$(tar -tvf "${empty_archive}" "${path}" | awk '{print $3}')"
+  test "${size}" = 0
 done
 
 details="$(tar -tvf "${archive}")"

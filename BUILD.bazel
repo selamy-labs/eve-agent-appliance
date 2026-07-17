@@ -12,7 +12,7 @@ load(
     "job_binding",
     "sidecar_binding",
 )
-load("//:test/fixtures/runfiles-fixture.bzl", "runfiles_fixture")
+load("//:test/fixtures/runfiles-fixture.bzl", "runfiles_fixture", "typed_image_validation_test")
 load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
 
 package(default_visibility = ["//visibility:public"])
@@ -57,6 +57,12 @@ js_binary(
     entry_point = "src/digest-evidence.mjs",
 )
 
+js_binary(
+    name = "validated_appliance_layout",
+    data = ["src/validated-appliance-layout.mjs"],
+    entry_point = "src/validated-appliance-layout.mjs",
+)
+
 js_test(
     name = "generator_test",
     data = [
@@ -94,6 +100,13 @@ sh_binary(
     srcs = ["test/fixtures/eve-runtime.sh"],
 )
 
+py_binary(
+    name = "fixture_empty_runfiles",
+    srcs = ["test/fixtures/empty-runfiles.py"],
+    legacy_create_init = True,
+    main = "test/fixtures/empty-runfiles.py",
+)
+
 sh_binary(
     name = "fixture_price_normalizer",
     srcs = ["test/fixtures/price-normalizer.sh"],
@@ -112,6 +125,14 @@ exec_binding(
     logical_name = "price-normalizer",
     target = ":fixture_price_normalizer",
     target_platform = ":linux_amd64",
+)
+
+exec_binding(
+    name = "fixture_empty_runfiles_binding",
+    logical_name = "runfiles-empty",
+    target = ":fixture_empty_runfiles",
+    target_platform = ":linux_amd64",
+    visibility = ["//visibility:private"],
 )
 
 runfiles_fixture(name = "fixture_runfiles_exec")
@@ -177,10 +198,21 @@ pkg_tar(
     visibility = ["//visibility:private"],
 )
 
+pkg_tar(
+    name = "fixture_empty_runfiles_tar",
+    srcs = [":fixture_empty_runfiles_binding"],
+    owner = "10001.10001",
+    portable_mtime = True,
+    visibility = ["//visibility:private"],
+)
+
 sh_test(
     name = "runfiles_packaging_test",
     srcs = ["test/runfiles-packaging-test.sh"],
-    data = [":fixture_runfiles_exec_tar"],
+    data = [
+        ":fixture_empty_runfiles_tar",
+        ":fixture_runfiles_exec_tar",
+    ],
 )
 
 agent_appliance(
@@ -202,6 +234,11 @@ appliance_oci_image(
     os = "linux",
     runtime_layer = ":example_appliance_runtime_layer",
     target_platform = ":linux_amd64",
+)
+
+typed_image_validation_test(
+    name = "typed_image_validation_test",
+    image = ":example_image",
 )
 
 capability_digest_evidence(

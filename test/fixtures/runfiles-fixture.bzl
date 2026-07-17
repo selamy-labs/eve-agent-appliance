@@ -51,3 +51,19 @@ runfiles_fixture = rule(
     attrs = {"conflicting_mappings": attr.bool()},
     executable = True,
 )
+
+
+def _typed_image_validation_test_impl(ctx):
+    outputs = ctx.attr.image[DefaultInfo].files.to_list()
+    if len(outputs) != 1 or not outputs[0].is_directory or not outputs[0].basename.endswith(".validated-layout"):
+        fail("typed image must expose one validated OCI layout tree")
+    executable = ctx.actions.declare_file(ctx.label.name)
+    ctx.actions.write(executable, "#!/bin/sh\nexit 0\n", is_executable = True)
+    return [DefaultInfo(executable = executable)]
+
+
+typed_image_validation_test = rule(
+    implementation = _typed_image_validation_test_impl,
+    attrs = {"image": attr.label(mandatory = True)},
+    test = True,
+)
