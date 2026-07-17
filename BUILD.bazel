@@ -58,6 +58,7 @@ filegroup(
 
 agent_appliance(
     name = "example_appliance",
+    agent_name = "nova",
     manifest = "test/fixtures/nova.yaml",
     bindings = {
         "eve": ":fixture_eve_runtime",

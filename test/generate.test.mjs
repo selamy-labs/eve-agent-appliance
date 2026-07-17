@@ -96,6 +96,41 @@ test("requires the entrypoint to be an in-process capability", async () => {
   );
 });
 
+test("binds the manifest identity to the consuming agent name", async () => {
+  const manifest = await fixture();
+  assert.throws(
+    () => generateArtifacts(manifest, bindingEntries, "shepherd"),
+    /must equal consuming agent identity shepherd/,
+  );
+});
+
+test("requires every in-process capability to have its own Bazel binding", async () => {
+  const manifest = await fixture();
+  manifest.spec.capabilities.push({
+    ...structuredClone(manifest.spec.capabilities[0]),
+    name: "portfolio-view",
+    health: { kind: "none", requiredForReadiness: false },
+  });
+  assert.throws(
+    () => generateArtifacts(manifest, bindingEntries),
+    /expected eve, portfolio-view, price-normalizer/,
+  );
+  const artifacts = generateArtifacts(manifest, [
+    ...bindingEntries,
+    { logicalName: "portfolio-view", binary: "portfolio.txt", label: "//:portfolio_view" },
+  ]);
+  assert.equal(JSON.parse(artifacts.catalog)[2].id, "nova.portfolio-view.v1");
+});
+
+test("accepts decimal Kubernetes quantity strings while rejecting numeric floats", async () => {
+  const manifest = await fixture();
+  manifest.spec.capabilities[1].resources.cpu = "0.5";
+  manifest.spec.capabilities[1].resources.memory = "1.5Gi";
+  assert.doesNotThrow(() => generateArtifacts(manifest, bindingEntries));
+  manifest.spec.capabilities[1].resources.cpu = 0.5;
+  assert.throws(() => generateArtifacts(manifest, bindingEntries), /quantity string/);
+});
+
 test("enforces mode, protocol, field, telemetry, health, and port rules", async () => {
   const wrongProtocol = await fixture();
   wrongProtocol.spec.capabilities[1].protocol = "grpc";

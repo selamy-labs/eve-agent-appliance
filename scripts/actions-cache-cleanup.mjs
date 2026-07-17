@@ -15,12 +15,17 @@ function requireRepository(repository) {
 }
 
 function instant(value, field) {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(value)) {
+  if (typeof value !== "string") {
     throw new TypeError(`${field} must be an ISO 8601 UTC instant`);
   }
-  const milliseconds = Date.parse(value);
-  if (!Number.isFinite(milliseconds)) throw new TypeError(`${field} must be a valid instant`);
-  return milliseconds;
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z$/.exec(value);
+  if (!match) throw new TypeError(`${field} must be an ISO 8601 UTC instant`);
+  const milliseconds = Date.parse(`${match[1]}Z`);
+  if (!Number.isFinite(milliseconds) || new Date(milliseconds).toISOString().slice(0, 19) !== match[1]) {
+    throw new TypeError(`${field} must be a valid instant`);
+  }
+  const nanoseconds = (match[2] ?? "").padEnd(9, "0");
+  return BigInt(milliseconds) * 1_000_000n + BigInt(nanoseconds || "0");
 }
 
 async function request(fetchImpl, url, token, init = {}) {
@@ -44,7 +49,7 @@ export async function listCaches({ repository, token, fetchImpl = fetch }) {
   const caches = [];
   const seen = new Set();
   let expectedTotal;
-  let previousInstant = -Infinity;
+  let previousInstant;
   for (let page = 1; page <= 10_000; page += 1) {
     const url = new URL(`https://api.github.com/repos/${repository}/actions/caches`);
     url.searchParams.set("per_page", String(PAGE_SIZE));
@@ -68,7 +73,9 @@ export async function listCaches({ repository, token, fetchImpl = fetch }) {
         throw new TypeError("cache inventory contains an invalid or duplicate ID");
       }
       const accessed = instant(cache.last_accessed_at, "last_accessed_at");
-      if (accessed < previousInstant) throw new Error("cache inventory is not sorted by last_accessed_at");
+      if (previousInstant !== undefined && accessed < previousInstant) {
+        throw new Error("cache inventory is not sorted by last_accessed_at");
+      }
       previousInstant = accessed;
       seen.add(cache.id);
       caches.push({ id: cache.id, lastAccessedAt: cache.last_accessed_at });

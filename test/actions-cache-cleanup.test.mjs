@@ -47,6 +47,15 @@ test("dry-run never deletes", async () => {
   assert.deepEqual(requests.map(({ method }) => method), ["GET", "GET"]);
 });
 
+test("preserves nanosecond precision at the strict 24-hour cutoff", async () => {
+  const justOld = { id: 3, last_accessed_at: "2026-07-16T11:59:59.999999999Z" };
+  const justFresh = { id: 4, last_accessed_at: "2026-07-16T12:00:00.000000001Z" };
+  const page = { total_count: 2, actions_caches: [justOld, justFresh] };
+  const { fetchImpl } = sequence([response(page), response(page)]);
+  const result = await enforceCacheLifetime({ repository, token, now, dryRun: true, fetchImpl });
+  assert.deepEqual(result.eligibleIds, [3]);
+});
+
 test("fails closed before delete when the confirming inventory changes", async () => {
   const first = { total_count: 1, actions_caches: [old] };
   const changed = { total_count: 1, actions_caches: [{ ...old, last_accessed_at: "2026-07-17T11:00:00Z" }] };
@@ -70,6 +79,14 @@ test("requires exact API status and sorted unique records", async () => {
   await assert.rejects(
     listCaches({ repository, token, fetchImpl: async () => response(unsorted) }),
     /not sorted/,
+  );
+  const invalidDate = {
+    total_count: 1,
+    actions_caches: [{ id: 9, last_accessed_at: "2026-02-30T00:00:00Z" }],
+  };
+  await assert.rejects(
+    listCaches({ repository, token, fetchImpl: async () => response(invalidDate) }),
+    /valid instant/,
   );
 });
 

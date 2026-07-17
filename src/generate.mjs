@@ -11,7 +11,7 @@ export const EXEC_OUTPUT_BYTE_CAP = 65_536;
 const LOGICAL_NAME = /^[a-z][a-z0-9-]{0,61}[a-z0-9]$/;
 const CORRELATION_ATTRIBUTE = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
 const DNS_LABEL = /^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$/;
-const RESOURCE_QUANTITY = /^(?:0|[1-9][0-9]*)(?:m|Ki|Mi|Gi|Ti|Pi|Ei)?$/;
+const RESOURCE_QUANTITY = /^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:m|[kKMGTPE]i?|[eE][+-]?[0-9]+)?$/;
 const ENDPOINT = /^(?<host>[^:]+):(?<port>[1-9][0-9]{0,4})$/;
 
 const MODES = new Set(["in_process", "exec", "sidecar", "job", "cronjob", "deployment"]);
@@ -249,13 +249,16 @@ function validateCapability(raw, index) {
   return capability;
 }
 
-export function validateManifest(raw, bindings) {
+export function validateManifest(raw, bindings, expectedAgentName) {
   objectAt(raw, "$", ["apiVersion", "kind", "metadata", "spec"]);
   if (raw.apiVersion !== SCHEMA_VERSION) fail("apiVersion", `must equal ${SCHEMA_VERSION}`);
   if (raw.kind !== "EveAgentAppliance") fail("kind", "must equal EveAgentAppliance");
   objectAt(raw.metadata, "metadata", ["name"]);
   if (typeof raw.metadata.name !== "string" || !DNS_LABEL.test(raw.metadata.name)) {
     fail("metadata.name", "must be a DNS-1123 label");
+  }
+  if (raw.metadata.name !== expectedAgentName) {
+    fail("metadata.name", `must equal consuming agent identity ${expectedAgentName}`);
   }
   objectAt(raw.spec, "spec", ["entrypoint", "capabilities"]);
   objectAt(raw.spec.entrypoint, "spec.entrypoint", ["capability", "port"]);
@@ -280,7 +283,10 @@ export function validateManifest(raw, bindings) {
   if (new Set(ports).size !== ports.length) fail("spec", "entrypoint and endpoint ports must be pairwise unique");
   const binaryNames = capabilities.filter(({ binary }) => binary).map(({ binary }) => binary);
   if (new Set(binaryNames).size !== binaryNames.length) fail("spec.capabilities", "binary logical names must be unique");
-  const expectedBindings = [...binaryNames, entrypoint.capability].sort();
+  const inProcessNames = capabilities
+    .filter(({ mode }) => mode === "in_process")
+    .map(({ name }) => name);
+  const expectedBindings = [...binaryNames, ...inProcessNames].sort();
   const actualBindings = [...bindings.keys()].sort();
   if (canonicalJson(expectedBindings) !== canonicalJson(actualBindings)) {
     fail("bindings", `expected ${expectedBindings.join(", ")}; received ${actualBindings.join(", ")}`);
@@ -317,20 +323,20 @@ function parseArguments(argv) {
     }
   }
   if (Object.keys(pending).length > 0) fail("arguments", "incomplete binding");
-  for (const flag of ["--manifest", "--catalog", "--binding-manifest", "--canonical-manifest"]) {
+  for (const flag of ["--agent-name", "--manifest", "--catalog", "--binding-manifest", "--canonical-manifest"]) {
     if (!scalar.has(flag)) fail("arguments", `missing ${flag}`);
   }
   return { scalar, bindings };
 }
 
-export function generateArtifacts(raw, bindingEntries) {
+export function generateArtifacts(raw, bindingEntries, expectedAgentName = raw?.metadata?.name) {
   const bindings = new Map();
   for (const entry of bindingEntries) {
     logicalName(entry.logicalName, "binding.logicalName");
     if (bindings.has(entry.logicalName)) fail("bindings", `duplicate ${entry.logicalName}`);
     bindings.set(entry.logicalName, entry);
   }
-  const manifest = validateManifest(raw, bindings);
+  const manifest = validateManifest(raw, bindings, expectedAgentName);
   const canonicalManifest = canonicalJson(manifest);
   const manifestDigest = `sha256:${createHash("sha256").update(canonicalManifest).digest("hex")}`;
   const capabilities = manifest.spec.capabilities;
@@ -377,7 +383,11 @@ async function main() {
   const source = await readFile(scalar.get("--manifest"), "utf8");
   const document = parseDocument(source, { prettyErrors: true, uniqueKeys: true });
   if (document.errors.length > 0) throw document.errors[0];
-  const artifacts = generateArtifacts(document.toJS({ maxAliasCount: 0 }), bindings);
+  const artifacts = generateArtifacts(
+    document.toJS({ maxAliasCount: 0 }),
+    bindings,
+    scalar.get("--agent-name"),
+  );
   await Promise.all([
     writeFile(scalar.get("--catalog"), artifacts.catalog, "utf8"),
     writeFile(scalar.get("--binding-manifest"), artifacts.bindingManifest, "utf8"),

@@ -19,6 +19,7 @@ load("@eve_agent_appliance//appliance:defs.bzl", "agent_appliance")
 
 agent_appliance(
     name = "appliance",
+    agent_name = "nova",
     manifest = "appliance/appliance.yaml",
     bindings = {
         "eve": ":eve_runtime",

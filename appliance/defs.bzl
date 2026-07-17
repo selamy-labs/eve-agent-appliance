@@ -28,6 +28,7 @@ def _agent_appliance_impl(ctx):
         fail("binding_names and bindings must have identical lengths")
     runtime_files = []
     binding_labels = []
+    seen_labels = {}
     for index, target in enumerate(ctx.attr.bindings):
         logical_name = ctx.attr.binding_names[index]
         if not _is_logical_name(logical_name):
@@ -35,14 +36,19 @@ def _agent_appliance_impl(ctx):
         files = target[DefaultInfo].files.to_list()
         if len(files) != 1:
             fail("binding %s must produce exactly one file, got %d" % (logical_name, len(files)))
+        canonical_label = str(target.label)
+        if canonical_label in seen_labels:
+            fail("bindings %s and %s resolve to the same target %s" % (seen_labels[canonical_label], logical_name, canonical_label))
+        seen_labels[canonical_label] = logical_name
         runtime_files.append(files[0])
-        binding_labels.append(str(target.label))
+        binding_labels.append(canonical_label)
 
     catalog = ctx.actions.declare_file(ctx.label.name + ".catalog.json")
     binding = ctx.actions.declare_file(ctx.label.name + ".binding.json")
     canonical_manifest = ctx.actions.declare_file(ctx.label.name + ".manifest.json")
 
     args = ctx.actions.args()
+    args.add("--agent-name", ctx.attr.agent_name)
     args.add("--manifest", ctx.file.manifest)
     args.add("--catalog", catalog)
     args.add("--binding-manifest", binding)
@@ -78,6 +84,7 @@ def _agent_appliance_impl(ctx):
 _agent_appliance = rule(
     implementation = _agent_appliance_impl,
     attrs = {
+        "agent_name": attr.string(mandatory = True),
         "manifest": attr.label(allow_single_file = [".yaml", ".yml"], mandatory = True),
         "binding_names": attr.string_list(mandatory = True),
         "bindings": attr.label_list(allow_files = True, mandatory = True),
@@ -90,11 +97,12 @@ _agent_appliance = rule(
 )
 
 
-def agent_appliance(name, manifest, bindings, visibility = None, tags = None):
+def agent_appliance(name, agent_name, manifest, bindings, visibility = None, tags = None):
     """Validates a manifest and binds every declared capability to a target.
 
     Args:
       name: Target name.
+      agent_name: Expected DNS-1123 agent identity.
       manifest: EveAgentAppliance YAML manifest.
       bindings: Dict from logical names to single-file Bazel targets.
       visibility: Optional target visibility.
@@ -105,6 +113,7 @@ def agent_appliance(name, manifest, bindings, visibility = None, tags = None):
     names = sorted(bindings.keys())
     _agent_appliance(
         name = name,
+        agent_name = agent_name,
         manifest = manifest,
         binding_names = names,
         bindings = [bindings[logical_name] for logical_name in names],
