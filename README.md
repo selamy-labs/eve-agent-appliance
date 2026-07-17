@@ -1,2 +1,43 @@
-# eve-agent-appliance
-Build-time EveAgentAppliance schema, Bazel rules, protocol grammar, and conformance kit
+# Eve Agent Appliance
+
+Build-time contracts for declarative Eve agents. This repository contains the
+versioned `EveAgentAppliance` schema, the `selamy.exec.v1` grammar, Bazel rules
+that bind manifests to explicit targets, deterministic artifact generators,
+and a conformance suite.
+
+It is not a runtime service. Agent repositories own their manifests, binaries,
+images, and deployment topology.
+
+## Use
+
+```starlark
+bazel_dep(name = "eve_agent_appliance", version = "0.1.0")
+```
+
+```starlark
+load("@eve_agent_appliance//appliance:defs.bzl", "agent_appliance")
+
+agent_appliance(
+    name = "appliance",
+    manifest = "appliance/appliance.yaml",
+    bindings = {
+        "eve": ":eve_runtime",
+        "price-normalizer": "//capabilities/price-normalizer",
+    },
+)
+```
+
+The rule emits canonical manifest JSON, a trusted binding manifest, and a
+sanitized model-visible catalog. Validation fails closed on unknown fields,
+closed-enum violations, invalid mode/protocol combinations, undeclared or
+unused bindings, and authority-bearing values disguised as logical names.
+
+## Development
+
+```bash
+bazel test //...
+bazel build //...
+```
+
+GitHub Actions cache entries last accessed more than 24 hours ago are removed
+by a source-controlled hourly policy. No Dockerfile is used or provided.

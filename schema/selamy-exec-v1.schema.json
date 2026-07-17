@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.selamy.ai/exec/v1.json",
+  "title": "selamy.exec.v1 envelope",
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/success" },
+    { "$ref": "#/$defs/failure" }
+  ],
+  "$defs": {
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["body", "capability", "protocol", "version"],
+      "properties": {
+        "body": { "type": "object" },
+        "capability": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,61}[a-z0-9]$"
+        },
+        "protocol": { "const": "selamy.exec.v1" },
+        "version": { "const": 1 }
+      }
+    },
+    "success": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["body", "protocol", "status", "version"],
+      "properties": {
+        "body": { "type": "object" },
+        "protocol": { "const": "selamy.exec.v1" },
+        "status": { "const": "ok" },
+        "version": { "const": 1 }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["error", "protocol", "status", "version"],
+      "properties": {
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["class", "message"],
+          "properties": {
+            "class": {
+              "enum": [
+                "invalid-envelope",
+                "unsupported-version",
+                "capability-mismatch",
+                "invalid-body",
+                "timeout",
+                "aborted",
+                "stdout-overflow",
+                "stderr-overflow",
+                "spawn-error",
+                "process-error"
+              ]
+            },
+            "message": { "type": "string", "minLength": 1 }
+          }
+        },
+        "protocol": { "const": "selamy.exec.v1" },
+        "status": { "const": "error" },
+        "version": { "const": 1 }
+      }
+    }
+  }
+}

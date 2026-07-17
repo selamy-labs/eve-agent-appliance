@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.selamy.ai/eve-agent-appliance/v1alpha1.json",
+  "title": "EveAgentAppliance v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "const": "agents.selamy.ai/v1alpha1" },
+    "kind": { "const": "EveAgentAppliance" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$"
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entrypoint", "capabilities"],
+      "properties": {
+        "entrypoint": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["capability", "port"],
+          "properties": {
+            "capability": { "$ref": "#/$defs/logicalName" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          }
+        },
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/capability" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "logicalName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,61}[a-z0-9]$"
+    },
+    "logicalNames": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/logicalName" }
+    },
+    "quantity": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)(m|Ki|Mi|Gi|Ti|Pi|Ei)?$"
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "mode",
+        "protocol",
+        "lifecycleOwner",
+        "consequenceClass",
+        "approvalClass",
+        "permissions",
+        "networkSurfaces",
+        "resources",
+        "telemetry"
+      ],
+      "properties": {
+        "name": { "$ref": "#/$defs/logicalName" },
+        "version": { "type": "integer", "minimum": 1 },
+        "mode": {
+          "enum": ["in_process", "exec", "sidecar", "job", "cronjob", "deployment"]
+        },
+        "protocol": {
+          "enum": ["eve.tool.v1", "selamy.exec.v1", "grpc", "k8s.job.result.v1", "rest"]
+        },
+        "binary": { "$ref": "#/$defs/logicalName" },
+        "lifecycleOwner": { "enum": ["eve-process", "k8s-controller", "argo"] },
+        "consequenceClass": { "enum": ["C0", "C1", "C2", "C3"] },
+        "approvalClass": {
+          "enum": ["internal-read-only", "scheduled-internal", "consequential-bounded", "authority-critical"]
+        },
+        "permissions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["network", "secrets", "rbac"],
+          "properties": {
+            "network": { "$ref": "#/$defs/logicalNames" },
+            "secrets": { "$ref": "#/$defs/logicalNames" },
+            "rbac": { "$ref": "#/$defs/logicalNames" }
+          }
+        },
+        "networkSurfaces": { "$ref": "#/$defs/logicalNames" },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["timeoutSeconds", "memory"],
+          "properties": {
+            "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 3600 },
+            "memory": { "$ref": "#/$defs/quantity" },
+            "cpu": { "$ref": "#/$defs/quantity" }
+          }
+        },
+        "health": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "enum": ["none", "exec-exit", "grpc-health", "http-get"] },
+            "requiredForReadiness": { "type": "boolean", "default": false }
+          }
+        },
+        "telemetry": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["otel", "correlation"],
+          "properties": {
+            "otel": { "enum": ["active-span-only", "exporter"] },
+            "correlation": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9]*([._-][a-z0-9]+)*$"
+              }
+            }
+          }
+        },
+        "endpoint": { "type": "string" },
+        "schedule": { "type": "string" },
+        "suspend": { "type": "boolean" },
+        "replicas": { "type": "integer", "minimum": 1 },
+        "io": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["inputSchemaRef", "outputSchemaRef"],
+          "properties": {
+            "inputSchemaRef": { "type": "string", "minLength": 1 },
+            "outputSchemaRef": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
+  }
+}

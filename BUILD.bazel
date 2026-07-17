@@ -1,0 +1,77 @@
+load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_library", "js_test")
+load("@eve_agent_appliance_npm//:defs.bzl", "npm_link_all_packages")
+load("//appliance:defs.bzl", "agent_appliance")
+
+package(default_visibility = ["//visibility:public"])
+
+npm_link_all_packages(name = "node_modules")
+
+js_library(
+    name = "generator_lib",
+    srcs = [
+        "src/canonical-json.mjs",
+        "src/generate.mjs",
+    ],
+    data = [":node_modules/yaml"],
+)
+
+js_binary(
+    name = "appliance_generator",
+    data = [
+        ":generator_lib",
+        ":node_modules/yaml",
+    ],
+    entry_point = "src/generate.mjs",
+)
+
+js_test(
+    name = "generator_test",
+    data = [
+        ":generator_lib",
+        ":node_modules/yaml",
+        "schema/eve-agent-appliance-v1alpha1.schema.json",
+        "schema/selamy-exec-v1.schema.json",
+        "test/fixtures/nova.yaml",
+    ],
+    entry_point = "test/generate.test.mjs",
+)
+
+js_test(
+    name = "actions_cache_cleanup_test",
+    data = [
+        ".github/workflows/actions-cache-24h.yaml",
+        ".github/workflows/ci.yaml",
+        "scripts/actions-cache-cleanup.mjs",
+    ],
+    entry_point = "test/actions-cache-cleanup.test.mjs",
+)
+
+filegroup(
+    name = "fixture_eve_runtime",
+    srcs = ["test/fixtures/eve-runtime.txt"],
+)
+
+filegroup(
+    name = "fixture_price_normalizer",
+    srcs = ["test/fixtures/price-normalizer.txt"],
+)
+
+agent_appliance(
+    name = "example_appliance",
+    manifest = "test/fixtures/nova.yaml",
+    bindings = {
+        "eve": ":fixture_eve_runtime",
+        "price-normalizer": ":fixture_price_normalizer",
+    },
+)
+
+sh_test(
+    name = "bazel_rule_test",
+    srcs = ["test/bazel-rule-test.sh"],
+    data = [":example_appliance"],
+)
+
+exports_files([
+    "schema/eve-agent-appliance-v1alpha1.schema.json",
+    "schema/selamy-exec-v1.schema.json",
+])
