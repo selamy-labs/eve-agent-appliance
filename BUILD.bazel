@@ -1,6 +1,13 @@
 load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_library", "js_test")
 load("@eve_agent_appliance_npm//:defs.bzl", "npm_link_all_packages")
-load("//appliance:defs.bzl", "agent_appliance", "capability_digest_evidence")
+load(
+    "//appliance:defs.bzl",
+    "agent_appliance",
+    "appliance_oci_image",
+    "capability_digest_evidence",
+    "exec_binding",
+    "in_process_binding",
+)
 
 package(default_visibility = ["//visibility:public"])
 
@@ -40,6 +47,7 @@ js_test(
     name = "generator_test",
     data = [
         ":generator_lib",
+        ":node_modules/ajv",
         ":node_modules/yaml",
         "schema/eve-agent-appliance-v1alpha1.schema.json",
         "schema/selamy-exec-v1.schema.json",
@@ -67,14 +75,27 @@ js_test(
     entry_point = "test/digest-evidence.test.mjs",
 )
 
-filegroup(
+sh_binary(
     name = "fixture_eve_runtime",
-    srcs = ["test/fixtures/eve-runtime.txt"],
+    srcs = ["test/fixtures/eve-runtime.sh"],
 )
 
-filegroup(
+sh_binary(
     name = "fixture_price_normalizer",
-    srcs = ["test/fixtures/price-normalizer.txt"],
+    srcs = ["test/fixtures/price-normalizer.sh"],
+    data = ["test/fixtures/price-normalizer-data.txt"],
+)
+
+in_process_binding(
+    name = "fixture_eve_binding",
+    logical_name = "eve",
+    target = ":fixture_eve_runtime",
+)
+
+exec_binding(
+    name = "fixture_price_normalizer_binding",
+    logical_name = "price-normalizer",
+    target = ":fixture_price_normalizer",
 )
 
 agent_appliance(
@@ -82,15 +103,22 @@ agent_appliance(
     agent_name = "nova",
     manifest = "test/fixtures/nova.yaml",
     bindings = {
-        "eve": ":fixture_eve_runtime",
-        "price-normalizer": ":fixture_price_normalizer",
+        "eve": ":fixture_eve_binding",
+        "price-normalizer": ":fixture_price_normalizer_binding",
     },
+)
+
+appliance_oci_image(
+    name = "example_image",
+    appliance = ":example_appliance",
+    architecture = "amd64",
+    os = "linux",
+    runtime_layer = ":example_appliance_runtime_layer",
 )
 
 capability_digest_evidence(
     name = "example_capability_digest",
-    appliance = ":example_appliance",
-    image_digest = "test/fixtures/image-digest.txt",
+    image = ":example_image",
 )
 
 sh_test(

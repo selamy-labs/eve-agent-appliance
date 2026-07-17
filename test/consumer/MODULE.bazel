@@ -1,0 +1,11 @@
+module(
+    name = "eve_agent_appliance_consumer",
+    version = "0.0.0",
+)
+
+bazel_dep(name = "eve_agent_appliance", version = "0.1.0")
+
+local_path_override(
+    module_name = "eve_agent_appliance",
+    path = "../..",
+)

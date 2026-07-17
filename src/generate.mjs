@@ -12,7 +12,9 @@ const LOGICAL_NAME = /^[a-z][a-z0-9-]{0,61}[a-z0-9]$/;
 const CORRELATION_ATTRIBUTE = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
 const DNS_LABEL = /^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$/;
 const RESOURCE_QUANTITY = /^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:m|[kKMGTPE]i?|[eE][+-]?[0-9]+)?$/;
-const ENDPOINT = /^(?<host>[^:]+):(?<port>[1-9][0-9]{0,4})$/;
+const SCHEMA_IDENTIFIER = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*(?:#[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*)?$/;
+const ENDPOINT = /^(?<host>[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*):(?<port>[1-9][0-9]{0,4})$/;
+const CRON_EXPRESSION = /^\S+(?:[ \t]+\S+){4}$/;
 
 const MODES = new Set(["in_process", "exec", "sidecar", "job", "cronjob", "deployment"]);
 const PROTOCOLS = new Set(["eve.tool.v1", "selamy.exec.v1", "grpc", "k8s.job.result.v1", "rest"]);
@@ -126,11 +128,13 @@ function validateHealth(value, path) {
 }
 
 function validateTelemetry(value, path, mode) {
-  objectAt(value, path, ["otel", "correlation"]);
+  objectAt(value, path, ["otel", "correlation"], ["otel"]);
   const telemetry = {
     otel: enumAt(value.otel, `${path}.otel`, OTEL_MODES),
-    correlation: correlationList(value.correlation, `${path}.correlation`),
   };
+  if ("correlation" in value) {
+    telemetry.correlation = correlationList(value.correlation, `${path}.correlation`);
+  }
   if ((mode === "exec" || mode === "in_process") && telemetry.otel !== "active-span-only") {
     fail(`${path}.otel`, `${mode} requires active-span-only`);
   }
@@ -140,8 +144,8 @@ function validateTelemetry(value, path, mode) {
 function validateIo(value, path) {
   objectAt(value, path, ["inputSchemaRef", "outputSchemaRef"]);
   for (const field of ["inputSchemaRef", "outputSchemaRef"]) {
-    if (typeof value[field] !== "string" || value[field].length === 0) {
-      fail(`${path}.${field}`, "must be a non-empty schema identifier");
+    if (typeof value[field] !== "string" || !SCHEMA_IDENTIFIER.test(value[field])) {
+      fail(`${path}.${field}`, "must be a path-free schema identifier");
     }
   }
   return value;
@@ -225,7 +229,7 @@ function validateCapability(raw, index) {
   if ("io" in raw) capability.io = validateIo(raw.io, `${path}.io`);
   if ("replicas" in raw) capability.replicas = positiveInteger(raw.replicas, `${path}.replicas`);
   if ("suspend" in raw && typeof raw.suspend !== "boolean") fail(`${path}.suspend`, "must be boolean");
-  if ("schedule" in raw && (typeof raw.schedule !== "string" || raw.schedule.trim().split(/\s+/).length !== 5)) {
+  if ("schedule" in raw && (typeof raw.schedule !== "string" || !CRON_EXPRESSION.test(raw.schedule))) {
     fail(`${path}.schedule`, "must be a five-field cron expression");
   }
   if ("endpoint" in raw) {
@@ -291,6 +295,13 @@ export function validateManifest(raw, bindings, expectedAgentName) {
   if (canonicalJson(expectedBindings) !== canonicalJson(actualBindings)) {
     fail("bindings", `expected ${expectedBindings.join(", ")}; received ${actualBindings.join(", ")}`);
   }
+  for (const capability of capabilities) {
+    const logical = capability.binary ?? capability.name;
+    const binding = bindings.get(logical);
+    if (binding.mode !== capability.mode) {
+      fail(`bindings.${logical}.mode`, `must equal manifest capability mode ${capability.mode}`);
+    }
+  }
   return {
     apiVersion: raw.apiVersion,
     kind: raw.kind,
@@ -299,7 +310,7 @@ export function validateManifest(raw, bindings, expectedAgentName) {
   };
 }
 
-function parseArguments(argv) {
+export function parseArguments(argv) {
   const scalar = new Map();
   const bindings = [];
   let pending = {};
@@ -308,13 +319,23 @@ function parseArguments(argv) {
     const value = argv[index + 1];
     if (!flag?.startsWith("--") || value === undefined) fail("arguments", `invalid argument at index ${index}`);
     if (flag === "--logical-name") {
-      if (pending.logicalName) fail("arguments", "binding logical name repeated before completion");
+      if (Object.keys(pending).length > 0) fail("arguments", "binding logical name repeated before completion");
       pending.logicalName = value;
     } else if (flag === "--binary") {
+      if (!pending.logicalName || pending.binary || pending.mode) {
+        fail("arguments", "binding binary must follow logical name and appear once");
+      }
       pending.binary = value;
+    } else if (flag === "--binding-mode") {
+      if (!pending.logicalName || !pending.binary || pending.mode) {
+        fail("arguments", "binding mode requires logical name and binary and must appear once");
+      }
+      pending.mode = value;
     } else if (flag === "--label") {
       pending.label = value;
-      if (!pending.logicalName || !pending.binary) fail("arguments", "binding requires logical name, binary, then label");
+      if (!pending.logicalName || !pending.binary || !pending.mode) {
+        fail("arguments", "binding requires logical name, binary, binding mode, then label");
+      }
       bindings.push(pending);
       pending = {};
     } else {
@@ -332,7 +353,9 @@ function parseArguments(argv) {
 export function generateArtifacts(raw, bindingEntries, expectedAgentName = raw?.metadata?.name) {
   const bindings = new Map();
   for (const entry of bindingEntries) {
+    objectAt(entry, "binding", ["logicalName", "binary", "mode", "label"]);
     logicalName(entry.logicalName, "binding.logicalName");
+    enumAt(entry.mode, "binding.mode", MODES);
     if (bindings.has(entry.logicalName)) fail("bindings", `duplicate ${entry.logicalName}`);
     bindings.set(entry.logicalName, entry);
   }
@@ -378,13 +401,18 @@ export function generateArtifacts(raw, bindingEntries, expectedAgentName = raw?.
   };
 }
 
+export function parseManifestYaml(source) {
+  const document = parseDocument(source, { prettyErrors: true, uniqueKeys: true });
+  const diagnostics = [...document.errors, ...document.warnings];
+  if (diagnostics.length > 0) throw diagnostics[0];
+  return document.toJS({ maxAliasCount: 0 });
+}
+
 async function main() {
   const { scalar, bindings } = parseArguments(process.argv.slice(2));
   const source = await readFile(scalar.get("--manifest"), "utf8");
-  const document = parseDocument(source, { prettyErrors: true, uniqueKeys: true });
-  if (document.errors.length > 0) throw document.errors[0];
   const artifacts = generateArtifacts(
-    document.toJS({ maxAliasCount: 0 }),
+    parseManifestYaml(source),
     bindings,
     scalar.get("--agent-name"),
   );

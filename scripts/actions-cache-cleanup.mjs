@@ -6,6 +6,11 @@ import { pathToFileURL } from "node:url";
 const API_VERSION = "2022-11-28";
 const PAGE_SIZE = 100;
 const RETENTION_MS = 24 * 60 * 60 * 1_000;
+const DELETION_EVIDENCE = Object.freeze({
+  inventoryPasses: 2,
+  perIdRevalidation: false,
+  atomic: false,
+});
 
 function requireRepository(repository) {
   if (typeof repository !== "string" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
@@ -120,7 +125,14 @@ export async function enforceCacheLifetime({
       deletedIds.push(id);
     }
   }
-  return { cutoff, dryRun, observed: confirmed.length, eligibleIds, deletedIds };
+  return {
+    cutoff,
+    dryRun,
+    observed: confirmed.length,
+    eligibleIds,
+    deletedIds,
+    deletionEvidence: DELETION_EVIDENCE,
+  };
 }
 
 export function renderSummary(result) {
@@ -132,6 +144,7 @@ export function renderSummary(result) {
     `- Observed: ${result.observed}`,
     `- Eligible IDs: ${result.eligibleIds.join(", ") || "none"}`,
     `- Deleted IDs: ${result.deletedIds.join(", ") || "none"}`,
+    "- Delete consistency: non-atomic (two matching inventory passes; no per-ID cache read is available for immediate revalidation)",
     "",
   ].join("\n");
 }

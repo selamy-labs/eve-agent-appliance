@@ -20,5 +20,5 @@ evidence="$(cat "${root}/example_capability_digest.json")"
 [[ "${binding}" == *'//:fixture_price_normalizer'* ]]
 [[ "${binding}" != *'imageDigest'* ]]
 [[ "${evidence}" == *'nova.price-normalizer.v1'* ]]
-[[ "${evidence}" == *'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'* ]]
+[[ "${evidence}" =~ \"imageDigest\":\"sha256:[0-9a-f]{64}\" ]]
 [[ "${evidence}" != *'/opt/selamy/'* ]]

@@ -5,11 +5,12 @@ module(
 
 bazel_dep(name = "aspect_rules_js", version = "3.2.2")
 bazel_dep(name = "rules_nodejs", version = "6.7.5")
+bazel_dep(name = "rules_oci", version = "2.3.0")
+bazel_dep(name = "rules_pkg", version = "1.2.0")
 
 node = use_extension(
     "@rules_nodejs//nodejs:extensions.bzl",
     "node",
-    dev_dependency = True,
 )
 node.toolchain(node_version_from_nvmrc = "//:.nvmrc")
 use_repo(node, "nodejs_toolchains")

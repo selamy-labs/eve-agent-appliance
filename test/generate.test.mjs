@@ -1,26 +1,50 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
+import Ajv2020 from "ajv/dist/2020.js";
 import { parse } from "yaml";
 import { canonicalJson } from "../src/canonical-json.mjs";
 import {
   EXEC_OUTPUT_BYTE_CAP,
   SCHEMA_VERSION,
   generateArtifacts,
+  parseArguments,
+  parseManifestYaml,
 } from "../src/generate.mjs";
 
 const fixtureUrl = new URL("fixtures/nova.yaml", import.meta.url);
 const bindingEntries = [
-  { logicalName: "eve", binary: "eve-runtime.txt", label: "//:eve_runtime" },
+  { logicalName: "eve", binary: "eve-runtime.txt", mode: "in_process", label: "//:eve_runtime" },
   {
     logicalName: "price-normalizer",
     binary: "price-normalizer.txt",
+    mode: "exec",
     label: "//:price_normalizer",
   },
 ];
 
 async function fixture() {
   return parse(await readFile(fixtureUrl, "utf8"));
+}
+
+function validateWithJsonSchema(schema, instances) {
+  const validator = new Ajv2020({
+    allErrors: true,
+    strict: true,
+    strictRequired: false,
+    strictTypes: false,
+  }).compile(schema);
+  return instances.map((instance) => validator(instance));
+}
+
+function modeShape(manifest, mode, protocol, fields = {}) {
+  const capability = manifest.spec.capabilities[1];
+  capability.mode = mode;
+  capability.protocol = protocol;
+  for (const field of ["endpoint", "schedule", "suspend", "replicas"]) delete capability[field];
+  if (mode !== "exec") delete capability.io;
+  Object.assign(capability, fields);
+  return manifest;
 }
 
 test("generates deterministic canonical, catalog, and trusted binding artifacts", async () => {
@@ -87,6 +111,73 @@ test("rejects undeclared, unused, duplicate, and authority-shaped bindings", asy
   );
 });
 
+test("parses typed binding modes and rejects missing or mismatched modes", async () => {
+  const scalarArguments = [
+    "--agent-name", "nova",
+    "--manifest", "appliance.yaml",
+    "--catalog", "catalog.json",
+    "--binding-manifest", "binding.json",
+    "--canonical-manifest", "manifest.json",
+  ];
+  const parsed = parseArguments([
+    ...scalarArguments,
+    "--logical-name", "price-normalizer",
+    "--binary", "price-normalizer",
+    "--binding-mode", "exec",
+    "--label", "//:price_normalizer",
+  ]);
+  assert.equal(parsed.bindings[0].mode, "exec");
+  assert.throws(
+    () => parseArguments([
+      ...scalarArguments,
+      "--logical-name", "price-normalizer",
+      "--binary", "price-normalizer",
+      "--label", "//:price_normalizer",
+    ]),
+    /binding requires logical name, binary, binding mode, then label/,
+  );
+  assert.throws(
+    () => parseArguments([
+      ...scalarArguments,
+      "--logical-name", "price-normalizer",
+      "--binding-mode", "exec",
+      "--binary", "price-normalizer",
+      "--label", "//:price_normalizer",
+    ]),
+    /binding mode requires logical name and binary and must appear once/,
+  );
+
+  const manifest = await fixture();
+  const mismatched = bindingEntries.map((binding) => (
+    binding.logicalName === "price-normalizer" ? { ...binding, mode: "in_process" } : binding
+  ));
+  assert.throws(
+    () => generateArtifacts(manifest, mismatched),
+    /bindings\.price-normalizer\.mode: must equal manifest capability mode exec/,
+  );
+  assert.throws(
+    () => generateArtifacts(manifest, bindingEntries.map(({ mode: _mode, ...binding }) => binding)),
+    /binding\.mode: required field is missing/,
+  );
+});
+
+test("rejects every YAML parser diagnostic, including unknown tags", async () => {
+  const source = await readFile(fixtureUrl, "utf8");
+  assert.deepEqual(parseManifestYaml(source), await fixture());
+  assert.throws(
+    () => parseManifestYaml(source.replace("kind: EveAgentAppliance", "kind: !contract EveAgentAppliance")),
+    /Unresolved tag: !contract/,
+  );
+  assert.throws(
+    () => parseManifestYaml(`%YAML 1.3\n---\n${source}`),
+    /Unsupported YAML version 1\.3/,
+  );
+  assert.throws(
+    () => parseManifestYaml(`${source}\nkind: EveAgentAppliance\n`),
+    /Map keys must be unique/,
+  );
+});
+
 test("requires the entrypoint to be an in-process capability", async () => {
   const manifest = await fixture();
   manifest.spec.entrypoint.capability = "price-normalizer";
@@ -117,7 +208,7 @@ test("requires every in-process capability to have its own Bazel binding", async
   );
   const artifacts = generateArtifacts(manifest, [
     ...bindingEntries,
-    { logicalName: "portfolio-view", binary: "portfolio.txt", label: "//:portfolio_view" },
+    { logicalName: "portfolio-view", binary: "portfolio.txt", mode: "in_process", label: "//:portfolio_view" },
   ]);
   assert.equal(JSON.parse(artifacts.catalog)[2].id, "nova.portfolio-view.v1");
 });
@@ -160,7 +251,9 @@ test("enforces mode, protocol, field, telemetry, health, and port rules", async 
   });
   delete duplicatePort.spec.capabilities[2].io;
   assert.throws(
-    () => generateArtifacts(duplicatePort, [...bindingEntries, { logicalName: "quote-sidecar", binary: "quote", label: "//:quote" }]),
+    () => generateArtifacts(duplicatePort, [...bindingEntries, {
+      logicalName: "quote-sidecar", binary: "quote", mode: "sidecar", label: "//:quote",
+    }]),
     /ports must be pairwise unique/,
   );
 });
@@ -200,7 +293,10 @@ test("accepts each closed invocation shape without adding a seventh", async () =
     capability.protocol = scenario.protocol;
     Object.assign(capability, scenario.fields);
     if (!["exec"].includes(scenario.mode)) delete capability.io;
-    const artifacts = generateArtifacts(manifest, bindingEntries);
+    const scenarioBindings = bindingEntries.map((binding) => (
+      binding.logicalName === "price-normalizer" ? { ...binding, mode: scenario.mode } : binding
+    ));
+    const artifacts = generateArtifacts(manifest, scenarioBindings);
     assert.equal(JSON.parse(artifacts.catalog)[1].mode, scenario.mode);
   }
 
@@ -240,10 +336,158 @@ test("records authority surfaces and requires their C3 consequence", async () =>
   assert.equal(artifacts.catalog.includes("market-data"), false);
 });
 
-test("schema documents retain closed roots and all six invocation modes", async () => {
+test("manifest schema and generator agree on the local validation corpus", async () => {
   const manifestSchema = JSON.parse(
     await readFile(new URL("../schema/eve-agent-appliance-v1alpha1.schema.json", import.meta.url), "utf8"),
   );
+  const base = await fixture();
+  const instance = (mutate = () => {}) => {
+    const manifest = structuredClone(base);
+    mutate(manifest);
+    return manifest;
+  };
+  const corpus = [
+    { name: "base manifest", valid: true, manifest: instance() },
+    {
+      name: "telemetry correlation omitted",
+      valid: true,
+      manifest: instance((manifest) => delete manifest.spec.capabilities[1].telemetry.correlation),
+    },
+    {
+      name: "path-shaped schema reference",
+      valid: false,
+      manifest: instance((manifest) => {
+        manifest.spec.capabilities[1].io.inputSchemaRef = "../../schema/request.json";
+      }),
+    },
+    {
+      name: "exec protocol mismatch",
+      valid: false,
+      manifest: instance((manifest) => { manifest.spec.capabilities[1].protocol = "grpc"; }),
+    },
+    {
+      name: "exec endpoint",
+      valid: false,
+      manifest: instance((manifest) => { manifest.spec.capabilities[1].endpoint = "127.0.0.1:4001"; }),
+    },
+    {
+      name: "loopback grpc sidecar",
+      valid: true,
+      manifest: instance((manifest) => modeShape(manifest, "sidecar", "grpc", {
+        endpoint: "127.1.2.3:4001",
+        health: { kind: "grpc-health", requiredForReadiness: true },
+      })),
+    },
+    {
+      name: "non-loopback sidecar",
+      valid: false,
+      manifest: instance((manifest) => modeShape(manifest, "sidecar", "grpc", {
+        endpoint: "10.0.0.1:4001",
+        health: { kind: "grpc-health", requiredForReadiness: true },
+      })),
+    },
+    {
+      name: "REST sidecar",
+      valid: false,
+      manifest: instance((manifest) => modeShape(manifest, "sidecar", "rest", {
+        endpoint: "127.0.0.1:4001",
+        health: { kind: "grpc-health", requiredForReadiness: true },
+      })),
+    },
+    {
+      name: "job with health",
+      valid: true,
+      manifest: instance((manifest) => modeShape(manifest, "job", "k8s.job.result.v1", {
+        health: { kind: "exec-exit", requiredForReadiness: false },
+      })),
+    },
+    {
+      name: "job endpoint",
+      valid: false,
+      manifest: instance((manifest) => modeShape(manifest, "job", "k8s.job.result.v1", {
+        endpoint: "job-service:4001",
+        health: { kind: "exec-exit", requiredForReadiness: false },
+      })),
+    },
+    {
+      name: "complete cronjob",
+      valid: true,
+      manifest: instance((manifest) => modeShape(manifest, "cronjob", "k8s.job.result.v1", {
+        schedule: "0 2 * * *",
+        suspend: true,
+      })),
+    },
+    {
+      name: "cronjob without suspend",
+      valid: false,
+      manifest: instance((manifest) => modeShape(manifest, "cronjob", "k8s.job.result.v1", {
+        schedule: "0 2 * * *",
+      })),
+    },
+    {
+      name: "external REST deployment endpoint",
+      valid: true,
+      manifest: instance((manifest) => modeShape(manifest, "deployment", "rest", {
+        endpoint: "quote-service:4002",
+        replicas: 1,
+        health: { kind: "http-get", requiredForReadiness: true },
+      })),
+    },
+    {
+      name: "deployment without endpoint",
+      valid: false,
+      manifest: instance((manifest) => modeShape(manifest, "deployment", "grpc", {
+        health: { kind: "grpc-health", requiredForReadiness: true },
+      })),
+    },
+    {
+      name: "deployment endpoint outside port range",
+      valid: false,
+      manifest: instance((manifest) => modeShape(manifest, "deployment", "grpc", {
+        endpoint: "quote-service:65536",
+        health: { kind: "grpc-health", requiredForReadiness: true },
+      })),
+    },
+    {
+      name: "readiness without a health kind",
+      valid: false,
+      manifest: instance((manifest) => {
+        manifest.spec.capabilities[1].health = { requiredForReadiness: true };
+      }),
+    },
+    {
+      name: "authority surface below C3",
+      valid: false,
+      manifest: instance((manifest) => { manifest.spec.capabilities[1].permissions.network = ["market-data"]; }),
+    },
+    {
+      name: "approval floor violation",
+      valid: false,
+      manifest: instance((manifest) => {
+        manifest.spec.capabilities[1].approvalClass = "consequential-bounded";
+      }),
+    },
+  ];
+
+  const schemaAcceptance = validateWithJsonSchema(manifestSchema, corpus.map(({ manifest }) => manifest));
+  for (const [index, scenario] of corpus.entries()) {
+    assert.equal(schemaAcceptance[index], scenario.valid, `${scenario.name}: schema acceptance`);
+    const capabilityMode = scenario.manifest.spec.capabilities[1].mode;
+    const bindings = bindingEntries.map((binding) => (
+      binding.logicalName === "price-normalizer" ? { ...binding, mode: capabilityMode } : binding
+    ));
+    let generatorAccepted = true;
+    try {
+      generateArtifacts(scenario.manifest, bindings);
+    } catch {
+      generatorAccepted = false;
+    }
+    assert.equal(generatorAccepted, scenario.valid, `${scenario.name}: generator acceptance`);
+  }
+
+  const withoutCorrelation = corpus.find(({ name }) => name === "telemetry correlation omitted").manifest;
+  const canonical = JSON.parse(generateArtifacts(withoutCorrelation, bindingEntries).canonicalManifest);
+  assert.equal(Object.hasOwn(canonical.spec.capabilities[1].telemetry, "correlation"), false);
   const execSchema = JSON.parse(
     await readFile(new URL("../schema/selamy-exec-v1.schema.json", import.meta.url), "utf8"),
   );
@@ -252,4 +496,85 @@ test("schema documents retain closed roots and all six invocation modes", async 
     "in_process", "exec", "sidecar", "job", "cronjob", "deployment",
   ]);
   assert.equal(execSchema.oneOf.length, 3);
+});
+
+test("selamy.exec.v1 schema exactly accepts the Nova N1 wire corpus", async () => {
+  const execSchema = JSON.parse(
+    await readFile(new URL("../schema/selamy-exec-v1.schema.json", import.meta.url), "utf8"),
+  );
+  const request = {
+    body: { price_minor: 123456, rounding: "nearest_even", tick_minor: 25 },
+    capability: "price-normalizer",
+    protocol: "selamy.exec.v1",
+    version: 1,
+  };
+  const success = {
+    body: { normalized_minor: 123450, steps: 4938 },
+    protocol: "selamy.exec.v1",
+    status: "ok",
+    version: 1,
+  };
+  const failure = {
+    error: { class: "out_of_range", field: "price_minor" },
+    protocol: "selamy.exec.v1",
+    status: "error",
+    version: 1,
+  };
+  const corpus = [
+    { name: "N1 request", valid: true, envelope: request },
+    { name: "N1 success", valid: true, envelope: success },
+    {
+      name: "round-up result above maximum input price",
+      valid: true,
+      envelope: {
+        ...success,
+        body: { normalized_minor: 1000999999998999, steps: 1001 },
+      },
+    },
+    { name: "N1 typed failure", valid: true, envelope: failure },
+    {
+      name: "failure without optional field",
+      valid: true,
+      envelope: { ...failure, error: { class: "internal" } },
+    },
+    {
+      name: "generic capability",
+      valid: false,
+      envelope: { ...request, capability: "portfolio-view" },
+    },
+    {
+      name: "unknown request body field",
+      valid: false,
+      envelope: { ...request, body: { ...request.body, currency: "USD" } },
+    },
+    {
+      name: "price outside N1 bound",
+      valid: false,
+      envelope: { ...request, body: { ...request.body, price_minor: 1000000000000001 } },
+    },
+    {
+      name: "unknown rounding mode",
+      valid: false,
+      envelope: { ...request, body: { ...request.body, rounding: "nearest" } },
+    },
+    {
+      name: "legacy hyphenated error class",
+      valid: false,
+      envelope: { ...failure, error: { class: "invalid-envelope" } },
+    },
+    {
+      name: "free-text error message",
+      valid: false,
+      envelope: { ...failure, error: { class: "out_of_range", message: "too large" } },
+    },
+    {
+      name: "unsupported envelope version",
+      valid: false,
+      envelope: { ...request, version: 2 },
+    },
+  ];
+  const acceptance = validateWithJsonSchema(execSchema, corpus.map(({ envelope }) => envelope));
+  for (const [index, scenario] of corpus.entries()) {
+    assert.equal(acceptance[index], scenario.valid, scenario.name);
+  }
 });

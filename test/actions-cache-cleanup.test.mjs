@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
-import { enforceCacheLifetime, listCaches } from "../scripts/actions-cache-cleanup.mjs";
+import {
+  enforceCacheLifetime,
+  listCaches,
+  renderSummary,
+} from "../scripts/actions-cache-cleanup.mjs";
 
 const repository = "selamy-labs/eve-agent-appliance";
 const token = "test-token";
@@ -36,6 +40,20 @@ test("deletes only entries strictly older than 24 hours after two stable invento
   assert.deepEqual(result.eligibleIds, [1]);
   assert.deepEqual(result.deletedIds, [1]);
   assert.deepEqual(requests.map(({ method }) => method), ["GET", "GET", "DELETE"]);
+});
+
+test("reports the unavoidable list/delete race without claiming atomicity", async () => {
+  const page = { total_count: 1, actions_caches: [old] };
+  const { fetchImpl } = sequence([
+    response(page), response(page), new Response(null, { status: 204 }),
+  ]);
+  const result = await enforceCacheLifetime({ repository, token, now, fetchImpl });
+  assert.deepEqual(result.deletionEvidence, {
+    inventoryPasses: 2,
+    perIdRevalidation: false,
+    atomic: false,
+  });
+  assert.match(renderSummary(result), /Delete consistency: non-atomic/);
 });
 
 test("dry-run never deletes", async () => {

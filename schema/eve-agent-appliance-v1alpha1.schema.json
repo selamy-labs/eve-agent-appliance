@@ -51,9 +51,44 @@
       "uniqueItems": true,
       "items": { "$ref": "#/$defs/logicalName" }
     },
+    "schemaIdentifier": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*(?:#[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*)?$"
+    },
     "quantity": {
       "type": "string",
       "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?(m|[kKMGTPE]i?|[eE][+-]?[0-9]+)?$"
+    },
+    "endpoint": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*:(?:[1-9]|[1-9][0-9]{1,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+    },
+    "sidecarEndpoint": {
+      "type": "string",
+      "pattern": "^127\\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})\\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})\\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2}):(?:[1-9]|[1-9][0-9]{1,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+    },
+    "health": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": ["none", "exec-exit", "grpc-health", "http-get"],
+          "default": "none"
+        },
+        "requiredForReadiness": { "type": "boolean", "default": false }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["requiredForReadiness"],
+            "properties": { "requiredForReadiness": { "const": true } }
+          },
+          "then": {
+            "required": ["kind"],
+            "properties": { "kind": { "enum": ["exec-exit", "grpc-health", "http-get"] } }
+          }
+        }
+      ]
     },
     "capability": {
       "type": "object",
@@ -73,7 +108,7 @@
       ],
       "properties": {
         "name": { "$ref": "#/$defs/logicalName" },
-        "version": { "type": "integer", "minimum": 1 },
+        "version": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         "mode": {
           "enum": ["in_process", "exec", "sidecar", "job", "cronjob", "deployment"]
         },
@@ -107,18 +142,11 @@
             "cpu": { "$ref": "#/$defs/quantity" }
           }
         },
-        "health": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "kind": { "enum": ["none", "exec-exit", "grpc-health", "http-get"] },
-            "requiredForReadiness": { "type": "boolean", "default": false }
-          }
-        },
+        "health": { "$ref": "#/$defs/health" },
         "telemetry": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["otel", "correlation"],
+          "required": ["otel"],
           "properties": {
             "otel": { "enum": ["active-span-only", "exporter"] },
             "correlation": {
@@ -131,20 +159,144 @@
             }
           }
         },
-        "endpoint": { "type": "string" },
-        "schedule": { "type": "string" },
+        "endpoint": { "$ref": "#/$defs/endpoint" },
+        "schedule": {
+          "type": "string",
+          "pattern": "^[^\\s]+(?:[ \\t]+[^\\s]+){4}$"
+        },
         "suspend": { "type": "boolean" },
-        "replicas": { "type": "integer", "minimum": 1 },
+        "replicas": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         "io": {
           "type": "object",
           "additionalProperties": false,
           "required": ["inputSchemaRef", "outputSchemaRef"],
           "properties": {
-            "inputSchemaRef": { "type": "string", "minLength": 1 },
-            "outputSchemaRef": { "type": "string", "minLength": 1 }
+            "inputSchemaRef": { "$ref": "#/$defs/schemaIdentifier" },
+            "outputSchemaRef": { "$ref": "#/$defs/schemaIdentifier" }
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "in_process" } } },
+          "then": {
+            "required": ["io"],
+            "properties": {
+              "protocol": { "const": "eve.tool.v1" },
+              "telemetry": { "properties": { "otel": { "const": "active-span-only" } } },
+              "binary": false,
+              "endpoint": false,
+              "schedule": false,
+              "suspend": false,
+              "replicas": false
+            }
+          }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "exec" } } },
+          "then": {
+            "required": ["binary", "io"],
+            "properties": {
+              "protocol": { "const": "selamy.exec.v1" },
+              "telemetry": { "properties": { "otel": { "const": "active-span-only" } } },
+              "endpoint": false,
+              "schedule": false,
+              "suspend": false,
+              "replicas": false
+            }
+          }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "sidecar" } } },
+          "then": {
+            "required": ["binary", "endpoint", "health"],
+            "properties": {
+              "protocol": { "const": "grpc" },
+              "endpoint": { "$ref": "#/$defs/sidecarEndpoint" },
+              "health": {
+                "required": ["kind"],
+                "properties": { "kind": { "enum": ["exec-exit", "grpc-health", "http-get"] } }
+              },
+              "schedule": false,
+              "suspend": false,
+              "replicas": false,
+              "io": false
+            }
+          }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "job" } } },
+          "then": {
+            "required": ["binary", "health"],
+            "properties": {
+              "protocol": { "const": "k8s.job.result.v1" },
+              "health": {
+                "required": ["kind"],
+                "properties": { "kind": { "enum": ["exec-exit", "grpc-health", "http-get"] } }
+              },
+              "endpoint": false,
+              "schedule": false,
+              "suspend": false,
+              "replicas": false,
+              "io": false
+            }
+          }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "cronjob" } } },
+          "then": {
+            "required": ["binary", "schedule", "suspend"],
+            "properties": {
+              "protocol": { "const": "k8s.job.result.v1" },
+              "endpoint": false,
+              "replicas": false,
+              "io": false
+            }
+          }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "deployment" } } },
+          "then": {
+            "required": ["binary", "endpoint", "health"],
+            "properties": {
+              "protocol": { "enum": ["grpc", "rest"] },
+              "health": {
+                "required": ["kind"],
+                "properties": { "kind": { "enum": ["exec-exit", "grpc-health", "http-get"] } }
+              },
+              "schedule": false,
+              "suspend": false,
+              "io": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "permissions": {
+                "anyOf": [
+                  { "properties": { "network": { "minItems": 1 } } },
+                  { "properties": { "secrets": { "minItems": 1 } } },
+                  { "properties": { "rbac": { "minItems": 1 } } }
+                ]
+              }
+            }
+          },
+          "then": { "properties": { "consequenceClass": { "const": "C3" } } }
+        },
+        {
+          "if": { "properties": { "approvalClass": { "const": "scheduled-internal" } } },
+          "then": { "properties": { "consequenceClass": { "enum": ["C1", "C2", "C3"] } } }
+        },
+        {
+          "if": { "properties": { "approvalClass": { "const": "consequential-bounded" } } },
+          "then": { "properties": { "consequenceClass": { "enum": ["C2", "C3"] } } }
+        },
+        {
+          "if": { "properties": { "approvalClass": { "const": "authority-critical" } } },
+          "then": { "properties": { "consequenceClass": { "const": "C3" } } }
+        }
+      ]
     }
   }
 }
