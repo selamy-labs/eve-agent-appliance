@@ -1,0 +1,38 @@
+name: Enforce 24-hour Actions cache policy
+
+on:
+  schedule:
+    - cron: "29 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Report eligible cache IDs without deleting them
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: eve-agent-appliance-actions-cache-24h
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    if: github.repository == 'selamy-labs/eve-agent-appliance' && github.ref == 'refs/heads/main'
+    runs-on: speedforge
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      - name: Enforce cache lifetime
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/actions-cache-cleanup.mjs

@@ -1,0 +1,89 @@
+load(
+    "@eve_agent_appliance//appliance:defs.bzl",
+    "agent_appliance",
+    "appliance_oci_image",
+    "capability_digest_evidence",
+    "exec_binding",
+    "in_process_binding",
+)
+load("@rules_oci//oci:defs.bzl", "oci_load")
+
+platform(
+    name = "linux_amd64",
+    constraint_values = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
+)
+
+sh_binary(
+    name = "eve_runtime",
+    srcs = ["eve-runtime.sh"],
+)
+
+sh_binary(
+    name = "echo_tool",
+    srcs = ["echo-tool.sh"],
+    data = ["echo-tool-data.txt"],
+)
+
+in_process_binding(
+    name = "eve_binding",
+    logical_name = "eve",
+    target = ":eve_runtime",
+    target_platform = ":linux_amd64",
+)
+
+exec_binding(
+    name = "echo_binding",
+    logical_name = "echo-tool",
+    target = ":echo_tool",
+    target_platform = ":linux_amd64",
+)
+
+agent_appliance(
+    name = "consumer_appliance",
+    agent_name = "consumer",
+    architecture = "amd64",
+    manifest = "appliance.yaml",
+    bindings = {
+        "echo-tool": ":echo_binding",
+        "eve": ":eve_binding",
+    },
+    os = "linux",
+)
+
+appliance_oci_image(
+    name = "consumer_image",
+    appliance = ":consumer_appliance",
+    architecture = "amd64",
+    base = "@consumer_alpine_linux_amd64",
+    os = "linux",
+    runtime_layer = ":consumer_appliance_runtime_layer",
+    target_platform = ":linux_amd64",
+)
+
+oci_load(
+    name = "consumer_image_load",
+    image = ":consumer_image",
+    repo_tags = ["eve-agent-appliance-consumer:g0"],
+)
+
+capability_digest_evidence(
+    name = "consumer_digest_evidence",
+    image = ":consumer_image",
+)
+
+sh_test(
+    name = "consumer_conformance_test",
+    srcs = ["consumer-conformance.sh"],
+    data = [
+        ":consumer_appliance_binding",
+        ":consumer_appliance_catalog",
+        ":consumer_appliance_manifest",
+        ":consumer_digest_evidence",
+        "golden/binding.sha256",
+        "golden/catalog.sha256",
+        "golden/manifest.sha256",
+    ],
+)

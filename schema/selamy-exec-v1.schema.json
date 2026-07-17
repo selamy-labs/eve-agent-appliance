@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.selamy.ai/exec/v1.json",
+  "title": "selamy.exec.v1 price-normalizer envelope",
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/success" },
+    { "$ref": "#/$defs/failure" }
+  ],
+  "$defs": {
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["body", "capability", "protocol", "version"],
+      "properties": {
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["price_minor", "rounding", "tick_minor"],
+          "properties": {
+            "price_minor": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            "rounding": { "enum": ["nearest_even", "down", "up"] },
+            "tick_minor": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000000000
+            }
+          }
+        },
+        "capability": { "const": "price-normalizer" },
+        "protocol": { "const": "selamy.exec.v1" },
+        "version": { "const": 1 }
+      }
+    },
+    "success": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["body", "protocol", "status", "version"],
+      "properties": {
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["normalized_minor", "steps"],
+          "properties": {
+            "normalized_minor": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000999999999999
+            },
+            "steps": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            }
+          }
+        },
+        "protocol": { "const": "selamy.exec.v1" },
+        "status": { "const": "ok" },
+        "version": { "const": 1 }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["error", "protocol", "status", "version"],
+      "properties": {
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["class"],
+          "properties": {
+            "class": {
+              "enum": [
+                "malformed_envelope",
+                "unsupported_protocol",
+                "unsupported_version",
+                "unknown_capability",
+                "out_of_range",
+                "invalid_argument",
+                "internal"
+              ]
+            },
+            "field": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*$"
+            }
+          }
+        },
+        "protocol": { "const": "selamy.exec.v1" },
+        "status": { "const": "error" },
+        "version": { "const": 1 }
+      }
+    }
+  }
+}

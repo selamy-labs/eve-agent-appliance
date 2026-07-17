@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  bazel-macos:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # v0.19.0
+        with:
+          bazelisk-cache: true
+          bazelisk-version: 1.26.0
+          repository-cache: true
+      - name: Test and build the complete contract graph
+        run: bazel test //... && bazel build //...
+      - name: Test and build a clean transitive consumer
+        working-directory: test/consumer
+        run: bazel test //... && bazel build //...
+
+  bazel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # v0.19.0
+        with:
+          bazelisk-cache: true
+          bazelisk-version: 1.26.0
+          repository-cache: true
+      - name: Test the complete contract graph
+        run: bazel test //...
+      - name: Build every published target
+        run: bazel build //...
+      - name: Test clean transitive consumer
+        working-directory: test/consumer
+        run: bazel test //...
+      - name: Build clean transitive consumer
+        working-directory: test/consumer
+        run: bazel build //...
+      - name: Load and execute packaged consumer capability
+        working-directory: test/consumer
+        run: |
+          bazel run //:consumer_image_load
+          output="$(docker run --rm --pull=never --network=none eve-agent-appliance-consumer:g0 /opt/selamy/bin/echo-tool)"
+          test "${output}" = "transitive-runfile"
+      - name: Reject handwritten image authority
+        run: test ! -e Dockerfile

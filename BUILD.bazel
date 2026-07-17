@@ -1,0 +1,263 @@
+load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_library", "js_test")
+load("@eve_agent_appliance_npm//:defs.bzl", "npm_link_all_packages")
+load(
+    "//appliance:defs.bzl",
+    "agent_appliance",
+    "appliance_oci_image",
+    "capability_digest_evidence",
+    "cronjob_binding",
+    "deployment_binding",
+    "exec_binding",
+    "in_process_binding",
+    "job_binding",
+    "sidecar_binding",
+)
+load("//:test/fixtures/runfiles-fixture.bzl", "runfiles_fixture", "typed_image_validation_test")
+load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
+
+package(default_visibility = ["//visibility:public"])
+
+platform(
+    name = "linux_amd64",
+    constraint_values = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
+)
+
+npm_link_all_packages(name = "node_modules")
+
+js_library(
+    name = "generator_lib",
+    srcs = [
+        "src/canonical-json.mjs",
+        "src/generate.mjs",
+    ],
+    data = [":node_modules/yaml"],
+)
+
+js_binary(
+    name = "appliance_generator",
+    data = [
+        ":generator_lib",
+        ":node_modules/yaml",
+    ],
+    entry_point = "src/generate.mjs",
+)
+
+js_library(
+    name = "digest_evidence_lib",
+    srcs = ["src/digest-evidence.mjs"],
+    deps = [":generator_lib"],
+)
+
+js_binary(
+    name = "capability_digest_generator",
+    data = [":digest_evidence_lib"],
+    entry_point = "src/digest-evidence.mjs",
+)
+
+js_binary(
+    name = "validated_appliance_layout",
+    data = ["src/validated-appliance-layout.mjs"],
+    entry_point = "src/validated-appliance-layout.mjs",
+)
+
+js_test(
+    name = "generator_test",
+    data = [
+        ":generator_lib",
+        ":node_modules/ajv",
+        ":node_modules/yaml",
+        "schema/eve-agent-appliance-v1alpha1.schema.json",
+        "schema/selamy-exec-v1.schema.json",
+        "test/fixtures/nova.yaml",
+    ],
+    entry_point = "test/generate.test.mjs",
+)
+
+js_test(
+    name = "actions_cache_cleanup_test",
+    data = [
+        ".github/workflows/actions-cache-24h.yaml",
+        ".github/workflows/ci.yaml",
+        "scripts/actions-cache-cleanup.mjs",
+    ],
+    entry_point = "test/actions-cache-cleanup.test.mjs",
+)
+
+js_test(
+    name = "digest_evidence_test",
+    data = [
+        ":digest_evidence_lib",
+        ":generator_lib",
+    ],
+    entry_point = "test/digest-evidence.test.mjs",
+)
+
+sh_binary(
+    name = "fixture_eve_runtime",
+    srcs = ["test/fixtures/eve-runtime.sh"],
+)
+
+py_binary(
+    name = "fixture_empty_runfiles",
+    srcs = ["test/fixtures/empty-runfiles.py"],
+    legacy_create_init = True,
+    main = "test/fixtures/empty-runfiles.py",
+)
+
+sh_binary(
+    name = "fixture_price_normalizer",
+    srcs = ["test/fixtures/price-normalizer.sh"],
+    data = ["test/fixtures/price-normalizer-data.txt"],
+)
+
+in_process_binding(
+    name = "fixture_eve_binding",
+    logical_name = "eve",
+    target = ":fixture_eve_runtime",
+    target_platform = ":linux_amd64",
+)
+
+exec_binding(
+    name = "fixture_price_normalizer_binding",
+    logical_name = "price-normalizer",
+    target = ":fixture_price_normalizer",
+    target_platform = ":linux_amd64",
+)
+
+exec_binding(
+    name = "fixture_empty_runfiles_binding",
+    logical_name = "runfiles-empty",
+    target = ":fixture_empty_runfiles",
+    target_platform = ":linux_amd64",
+    visibility = ["//visibility:private"],
+)
+
+runfiles_fixture(name = "fixture_runfiles_exec")
+runfiles_fixture(name = "fixture_runfiles_in_process")
+runfiles_fixture(name = "fixture_runfiles_sidecar")
+runfiles_fixture(name = "fixture_runfiles_job")
+runfiles_fixture(name = "fixture_runfiles_cronjob")
+runfiles_fixture(name = "fixture_runfiles_deployment")
+
+exec_binding(
+    name = "fixture_runfiles_exec_binding",
+    logical_name = "runfiles-exec",
+    target = ":fixture_runfiles_exec",
+    target_platform = ":linux_amd64",
+    visibility = ["//visibility:private"],
+)
+
+in_process_binding(
+    name = "fixture_runfiles_in_process_binding",
+    logical_name = "runfiles-in-process",
+    target = ":fixture_runfiles_in_process",
+    target_platform = ":linux_amd64",
+    visibility = ["//visibility:private"],
+)
+
+sidecar_binding(
+    name = "fixture_runfiles_sidecar_binding",
+    logical_name = "runfiles-sidecar",
+    target = ":fixture_runfiles_sidecar",
+    target_platform = ":linux_amd64",
+    visibility = ["//visibility:private"],
+)
+
+job_binding(
+    name = "fixture_runfiles_job_binding",
+    logical_name = "runfiles-job",
+    target = ":fixture_runfiles_job",
+    target_platform = ":linux_amd64",
+    visibility = ["//visibility:private"],
+)
+
+cronjob_binding(
+    name = "fixture_runfiles_cronjob_binding",
+    logical_name = "runfiles-cronjob",
+    target = ":fixture_runfiles_cronjob",
+    target_platform = ":linux_amd64",
+    visibility = ["//visibility:private"],
+)
+
+deployment_binding(
+    name = "fixture_runfiles_deployment_binding",
+    logical_name = "runfiles-deployment",
+    target = ":fixture_runfiles_deployment",
+    target_platform = ":linux_amd64",
+    visibility = ["//visibility:private"],
+)
+
+pkg_tar(
+    name = "fixture_runfiles_exec_tar",
+    srcs = [":fixture_runfiles_exec_binding"],
+    owner = "10001.10001",
+    portable_mtime = True,
+    visibility = ["//visibility:private"],
+)
+
+pkg_tar(
+    name = "fixture_empty_runfiles_tar",
+    srcs = [":fixture_empty_runfiles_binding"],
+    owner = "10001.10001",
+    portable_mtime = True,
+    visibility = ["//visibility:private"],
+)
+
+sh_test(
+    name = "runfiles_packaging_test",
+    srcs = ["test/runfiles-packaging-test.sh"],
+    data = [
+        ":fixture_empty_runfiles_tar",
+        ":fixture_runfiles_exec_tar",
+    ],
+)
+
+agent_appliance(
+    name = "example_appliance",
+    agent_name = "nova",
+    architecture = "amd64",
+    manifest = "test/fixtures/nova.yaml",
+    bindings = {
+        "eve": ":fixture_eve_binding",
+        "price-normalizer": ":fixture_price_normalizer_binding",
+    },
+    os = "linux",
+)
+
+appliance_oci_image(
+    name = "example_image",
+    appliance = ":example_appliance",
+    architecture = "amd64",
+    os = "linux",
+    runtime_layer = ":example_appliance_runtime_layer",
+    target_platform = ":linux_amd64",
+)
+
+typed_image_validation_test(
+    name = "typed_image_validation_test",
+    image = ":example_image",
+)
+
+capability_digest_evidence(
+    name = "example_capability_digest",
+    image = ":example_image",
+)
+
+sh_test(
+    name = "bazel_rule_test",
+    srcs = ["test/bazel-rule-test.sh"],
+    data = [
+        ":example_appliance_binding",
+        ":example_appliance_catalog",
+        ":example_appliance_manifest",
+        ":example_capability_digest",
+    ],
+)
+
+exports_files([
+    "schema/eve-agent-appliance-v1alpha1.schema.json",
+    "schema/selamy-exec-v1.schema.json",
+])

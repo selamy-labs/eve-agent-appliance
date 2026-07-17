@@ -1,0 +1,50 @@
+apiVersion: agents.selamy.ai/v1alpha1
+kind: EveAgentAppliance
+metadata:
+  name: consumer
+spec:
+  entrypoint:
+    capability: eve
+    port: 3000
+  capabilities:
+    - name: eve
+      version: 1
+      mode: in_process
+      protocol: eve.tool.v1
+      lifecycleOwner: eve-process
+      consequenceClass: C0
+      approvalClass: internal-read-only
+      permissions:
+        network: []
+        secrets: []
+        rbac: []
+      networkSurfaces: []
+      resources:
+        timeoutSeconds: 30
+        memory: 128Mi
+      telemetry:
+        otel: active-span-only
+      io:
+        inputSchemaRef: eve.tool.v1#request
+        outputSchemaRef: eve.tool.v1#response
+    - name: echo-tool
+      version: 1
+      mode: exec
+      protocol: selamy.exec.v1
+      binary: echo-tool
+      lifecycleOwner: eve-process
+      consequenceClass: C0
+      approvalClass: internal-read-only
+      permissions:
+        network: []
+        secrets: []
+        rbac: []
+      networkSurfaces: []
+      resources:
+        timeoutSeconds: 5
+        memory: 16Mi
+      telemetry:
+        otel: active-span-only
+      io:
+        inputSchemaRef: selamy.exec.v1#echo-tool.request
+        outputSchemaRef: selamy.exec.v1#echo-tool.response
