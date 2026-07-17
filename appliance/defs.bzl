@@ -26,10 +26,8 @@ def _is_logical_name(value):
 def _agent_appliance_impl(ctx):
     if len(ctx.attr.binding_names) != len(ctx.attr.bindings):
         fail("binding_names and bindings must have identical lengths")
-    if len(ctx.attr.binding_labels) != len(ctx.attr.bindings):
-        fail("binding_labels and bindings must have identical lengths")
-
     runtime_files = []
+    binding_labels = []
     for index, target in enumerate(ctx.attr.bindings):
         logical_name = ctx.attr.binding_names[index]
         if not _is_logical_name(logical_name):
@@ -38,6 +36,7 @@ def _agent_appliance_impl(ctx):
         if len(files) != 1:
             fail("binding %s must produce exactly one file, got %d" % (logical_name, len(files)))
         runtime_files.append(files[0])
+        binding_labels.append(str(target.label))
 
     catalog = ctx.actions.declare_file(ctx.label.name + ".catalog.json")
     binding = ctx.actions.declare_file(ctx.label.name + ".binding.json")
@@ -51,7 +50,7 @@ def _agent_appliance_impl(ctx):
     for index, runtime_file in enumerate(runtime_files):
         args.add("--logical-name", ctx.attr.binding_names[index])
         args.add("--binary", runtime_file)
-        args.add("--label", ctx.attr.binding_labels[index])
+        args.add("--label", binding_labels[index])
 
     ctx.actions.run(
         arguments = [args],
@@ -81,7 +80,6 @@ _agent_appliance = rule(
     attrs = {
         "manifest": attr.label(allow_single_file = [".yaml", ".yml"], mandatory = True),
         "binding_names": attr.string_list(mandatory = True),
-        "binding_labels": attr.string_list(mandatory = True),
         "bindings": attr.label_list(allow_files = True, mandatory = True),
         "_generator": attr.label(
             cfg = "exec",
@@ -109,7 +107,6 @@ def agent_appliance(name, manifest, bindings, visibility = None, tags = None):
         name = name,
         manifest = manifest,
         binding_names = names,
-        binding_labels = [str(bindings[logical_name]) for logical_name in names],
         bindings = [bindings[logical_name] for logical_name in names],
         tags = tags,
         visibility = visibility,
