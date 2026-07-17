@@ -100,4 +100,8 @@ test("pins every third-party workflow action and scopes cleanup to this reposito
   const cleanup = await readFile(new URL("../.github/workflows/actions-cache-24h.yaml", import.meta.url), "utf8");
   assert.match(cleanup, /github\.repository == 'selamy-labs\/eve-agent-appliance'/);
   assert.match(cleanup, /cron: "29 \* \* \* \*"/);
+  const ci = await readFile(new URL("../.github/workflows/ci.yaml", import.meta.url), "utf8");
+  assert.match(ci, /runs-on: ubuntu-24\.04/);
+  assert.doesNotMatch(ci, /runs-on: speedforge/);
+  assert.doesNotMatch(ci, /pull_request_target/);
 });
