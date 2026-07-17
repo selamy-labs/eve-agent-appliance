@@ -10,6 +10,13 @@ import { canonicalJson } from "./canonical-json.mjs";
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const CAPABILITY_ID = /^[a-z]([-a-z0-9]{0,61}[a-z0-9])?\.[a-z][a-z0-9-]{0,61}[a-z0-9]\.v[1-9][0-9]*$/;
 const BLOCK_SIZE = 512;
+const OCI_INDEX_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json";
+const OCI_MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json";
+const OCI_CONFIG_MEDIA_TYPE = "application/vnd.oci.image.config.v1+json";
+const OCI_LAYER_MEDIA_TYPES = new Set([
+  "application/vnd.oci.image.layer.v1.tar",
+  "application/vnd.oci.image.layer.v1.tar+gzip",
+]);
 
 function sha256(bytes) {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
@@ -77,6 +84,13 @@ function applyWhiteout(files, path) {
   return true;
 }
 
+function replaceEntry(files, path, entry) {
+  if (entry.kind !== "directory") {
+    for (const candidate of files.keys()) if (candidate.startsWith(`${path}/`)) files.delete(candidate);
+  }
+  files.set(path, entry);
+}
+
 function applyTarLayer(files, archive) {
   let offset = 0;
   let pax = {};
@@ -105,8 +119,16 @@ function applyTarLayer(files, archive) {
     pax = {};
     if (applyWhiteout(files, path)) continue;
     if (type === "\0" || type === "0" || type === "7") {
-      files.set(path, { bytes: Buffer.from(bytes), gid, mode, uid });
-    } else if (!["1", "2", "5", "g"].includes(type)) {
+      replaceEntry(files, path, { kind: "regular", bytes: Buffer.from(bytes), gid, mode, uid });
+    } else if (type === "1") {
+      replaceEntry(files, path, { kind: "hardlink" });
+    } else if (type === "2") {
+      replaceEntry(files, path, { kind: "symlink" });
+    } else if (type === "5") {
+      replaceEntry(files, path, { kind: "directory" });
+    } else if (["3", "4", "6"].includes(type)) {
+      replaceEntry(files, path, { kind: "special" });
+    } else if (type !== "g") {
       throw new TypeError(`unsupported tar entry type ${JSON.stringify(type)} for ${path}`);
     }
   }
@@ -118,46 +140,97 @@ async function readVerifiedBlob(layout, descriptor, path) {
     throw new TypeError(`${path} must be an OCI descriptor`);
   }
   const digest = requireDigest(descriptor.digest, `${path}.digest`);
+  if (!Number.isSafeInteger(descriptor.size) || descriptor.size < 0) {
+    throw new TypeError(`${path}.size must be a non-negative safe integer`);
+  }
   const bytes = await readFile(join(layout, "blobs", "sha256", digest.slice("sha256:".length)));
   if (sha256(bytes) !== digest) throw new TypeError(`${path} blob digest mismatch`);
   if (descriptor.size !== bytes.length) throw new TypeError(`${path} blob size mismatch`);
   return bytes;
 }
 
-export async function verifyOciImage(layout, requiredFiles) {
+function parseJsonObject(bytes, path) {
+  let value;
+  try {
+    value = JSON.parse(bytes);
+  } catch (error) {
+    throw new TypeError(`${path} must contain valid JSON`, { cause: error });
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${path} must contain a JSON object`);
+  }
+  return value;
+}
+
+function requireMediaType(value, expected, path) {
+  if (value !== expected) throw new TypeError(`${path} must be ${expected}`);
+}
+
+export async function verifyOciImage(layout, requiredFiles, expectedPlatform) {
+  if (!expectedPlatform || typeof expectedPlatform !== "object" || Array.isArray(expectedPlatform)) {
+    throw new TypeError("expected OCI platform must include os and architecture");
+  }
+  const { architecture, os } = expectedPlatform;
+  if (typeof os !== "string" || os.length === 0 || typeof architecture !== "string" || architecture.length === 0) {
+    throw new TypeError("expected OCI platform must include os and architecture");
+  }
+
+  const layoutBytes = await readFile(join(layout, "oci-layout"));
+  const layoutMetadata = parseJsonObject(layoutBytes, "oci-layout");
+  if (layoutMetadata.imageLayoutVersion !== "1.0.0") {
+    throw new TypeError("oci-layout.imageLayoutVersion must be 1.0.0");
+  }
+
   const indexBytes = await readFile(join(layout, "index.json"));
-  const index = JSON.parse(indexBytes);
+  const index = parseJsonObject(indexBytes, "index.json");
+  requireMediaType(index.mediaType, OCI_INDEX_MEDIA_TYPE, "index.json.mediaType");
   if (index.schemaVersion !== 2 || !Array.isArray(index.manifests) || index.manifests.length !== 1) {
     throw new TypeError("OCI layout must contain exactly one schemaVersion 2 image manifest");
   }
   const manifestDescriptor = index.manifests[0];
+  requireMediaType(manifestDescriptor?.mediaType, OCI_MANIFEST_MEDIA_TYPE, "index.manifests[0].mediaType");
   const manifestBytes = await readVerifiedBlob(layout, manifestDescriptor, "index.manifests[0]");
-  const manifest = JSON.parse(manifestBytes);
+  const manifest = parseJsonObject(manifestBytes, "image manifest");
+  requireMediaType(manifest.mediaType, OCI_MANIFEST_MEDIA_TYPE, "image manifest.mediaType");
   if (manifest.schemaVersion !== 2 || !Array.isArray(manifest.layers) || manifest.layers.length === 0) {
     throw new TypeError("OCI image manifest must contain at least one layer");
+  }
+  requireMediaType(manifest.config?.mediaType, OCI_CONFIG_MEDIA_TYPE, "manifest.config.mediaType");
+  const configBytes = await readVerifiedBlob(layout, manifest.config, "manifest.config");
+  const config = parseJsonObject(configBytes, "image config blob");
+  if (config.os !== os || config.architecture !== architecture) {
+    throw new TypeError(
+      `OCI image platform ${String(config.os)}/${String(config.architecture)} does not match expected ${os}/${architecture}`,
+    );
   }
 
   const files = new Map();
   for (const [index, descriptor] of manifest.layers.entries()) {
+    if (!OCI_LAYER_MEDIA_TYPES.has(descriptor?.mediaType)) {
+      throw new TypeError(`manifest.layers[${index}] has unsupported media type ${descriptor?.mediaType}`);
+    }
     const compressed = await readVerifiedBlob(layout, descriptor, `manifest.layers[${index}]`);
     let archive;
-    if (descriptor.mediaType?.endsWith("+gzip")) archive = gunzipSync(compressed);
-    else if (descriptor.mediaType?.endsWith(".tar")) archive = compressed;
-    else throw new TypeError(`manifest.layers[${index}] has unsupported media type ${descriptor.mediaType}`);
+    if (descriptor.mediaType.endsWith("+gzip")) archive = gunzipSync(compressed);
+    else archive = compressed;
     applyTarLayer(files, archive);
   }
 
   for (const requirement of requiredFiles) {
     const path = normalizeImagePath(requirement.imagePath);
+    if (typeof requirement.expectedMode !== "string" || !/^0[0-7]{3}$/.test(requirement.expectedMode)) {
+      throw new TypeError(`OCI image requirement /${path} must declare an expected octal mode`);
+    }
     const actual = files.get(path);
     if (!actual) throw new TypeError(`OCI image is missing required runtime file /${path}`);
+    if (actual.kind !== "regular") {
+      throw new TypeError(`OCI image required runtime file /${path} must be a regular file`);
+    }
     const expectedBytes = await readFile(requirement.sourceFile);
     if (sha256(actual.bytes) !== sha256(expectedBytes)) {
       throw new TypeError(`OCI image runtime file /${path} does not match its Bazel source`);
     }
-    const expectedMode = path.startsWith("opt/selamy/bin/") && !path.includes(".runfiles/") && !path.endsWith(".repo_mapping")
-      ? 0o555
-      : 0o444;
+    const expectedMode = Number.parseInt(requirement.expectedMode, 8);
     if ((actual.mode & 0o7777) !== expectedMode || actual.uid !== 10_001 || actual.gid !== 10_001) {
       throw new TypeError(`OCI image runtime file /${path} has unexpected mode or ownership`);
     }
@@ -194,25 +267,47 @@ export function generateDigestEvidence(bindingManifest, imageDigest) {
 function parseArguments(argv) {
   const scalar = new Map();
   const requiredFiles = [];
-  let pendingPath;
+  const scalarFlags = new Set([
+    "--binding-manifest",
+    "--expected-architecture",
+    "--expected-os",
+    "--oci-layout",
+    "--output",
+  ]);
+  let pendingFile = {};
   for (let index = 0; index < argv.length; index += 2) {
     const flag = argv[index];
     const value = argv[index + 1];
     if (!flag?.startsWith("--") || value === undefined) throw new TypeError(`invalid argument at index ${index}`);
     if (flag === "--image-path") {
-      if (pendingPath !== undefined) throw new TypeError("image path repeated before source file");
-      pendingPath = value;
+      if (Object.keys(pendingFile).length !== 0) throw new TypeError("image path repeated before completing a file requirement");
+      pendingFile.imagePath = value;
     } else if (flag === "--source-file") {
-      if (pendingPath === undefined) throw new TypeError("source file requires a preceding image path");
-      requiredFiles.push({ imagePath: pendingPath, sourceFile: value });
-      pendingPath = undefined;
+      if (pendingFile.imagePath === undefined || pendingFile.sourceFile !== undefined) {
+        throw new TypeError("source file requires one preceding image path");
+      }
+      pendingFile.sourceFile = value;
+    } else if (flag === "--expected-mode") {
+      if (pendingFile.imagePath === undefined || pendingFile.sourceFile === undefined) {
+        throw new TypeError("expected mode requires a preceding image path and source file");
+      }
+      if (!/^0[0-7]{3}$/.test(value)) throw new TypeError(`invalid expected mode ${value}`);
+      requiredFiles.push({ ...pendingFile, expectedMode: value });
+      pendingFile = {};
     } else {
+      if (!scalarFlags.has(flag)) throw new TypeError(`unknown argument ${flag}`);
       if (scalar.has(flag)) throw new TypeError(`duplicate ${flag}`);
       scalar.set(flag, value);
     }
   }
-  if (pendingPath !== undefined) throw new TypeError("incomplete image file requirement");
-  for (const flag of ["--binding-manifest", "--oci-layout", "--output"]) {
+  if (Object.keys(pendingFile).length !== 0) throw new TypeError("incomplete image file requirement");
+  for (const flag of [
+    "--binding-manifest",
+    "--expected-architecture",
+    "--expected-os",
+    "--oci-layout",
+    "--output",
+  ]) {
     if (!scalar.has(flag)) throw new TypeError(`missing ${flag}`);
   }
   if (requiredFiles.length === 0) throw new TypeError("at least one required image file is required");
@@ -222,7 +317,10 @@ function parseArguments(argv) {
 async function main() {
   const { requiredFiles, scalar } = parseArguments(process.argv.slice(2));
   const bindingSource = await readFile(scalar.get("--binding-manifest"), "utf8");
-  const imageDigest = await verifyOciImage(scalar.get("--oci-layout"), requiredFiles);
+  const imageDigest = await verifyOciImage(scalar.get("--oci-layout"), requiredFiles, {
+    architecture: scalar.get("--expected-architecture"),
+    os: scalar.get("--expected-os"),
+  });
   const evidence = generateDigestEvidence(JSON.parse(bindingSource), imageDigest);
   await writeFile(scalar.get("--output"), evidence, "utf8");
 }

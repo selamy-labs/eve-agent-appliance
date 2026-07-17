@@ -1,3 +1,3 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 printf '%s\n' eve-runtime

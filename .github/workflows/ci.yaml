@@ -35,5 +35,11 @@ jobs:
       - name: Build clean transitive consumer
         working-directory: test/consumer
         run: bazel build //...
+      - name: Load and execute packaged consumer capability
+        working-directory: test/consumer
+        run: |
+          bazel run //:consumer_image_load
+          output="$(docker run --rm --pull=never --network=none eve-agent-appliance-consumer:g0 /opt/selamy/bin/echo-tool)"
+          test "${output}" = "transitive-runfile"
       - name: Reject handwritten image authority
         run: test ! -e Dockerfile

@@ -128,6 +128,10 @@ test("parses typed binding modes and rejects missing or mismatched modes", async
   ]);
   assert.equal(parsed.bindings[0].mode, "exec");
   assert.throws(
+    () => parseArguments([...scalarArguments, "--typo", "ignored"]),
+    /unknown flag --typo/,
+  );
+  assert.throws(
     () => parseArguments([
       ...scalarArguments,
       "--logical-name", "price-normalizer",

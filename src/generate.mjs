@@ -311,6 +311,13 @@ export function validateManifest(raw, bindings, expectedAgentName) {
 }
 
 export function parseArguments(argv) {
+  const scalarFlags = new Set([
+    "--agent-name",
+    "--binding-manifest",
+    "--canonical-manifest",
+    "--catalog",
+    "--manifest",
+  ]);
   const scalar = new Map();
   const bindings = [];
   let pending = {};
@@ -339,6 +346,7 @@ export function parseArguments(argv) {
       bindings.push(pending);
       pending = {};
     } else {
+      if (!scalarFlags.has(flag)) fail("arguments", `unknown flag ${flag}`);
       if (scalar.has(flag)) fail("arguments", `duplicate ${flag}`);
       scalar.set(flag, value);
     }

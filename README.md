@@ -12,6 +12,7 @@ images, and deployment topology.
 
 ```starlark
 bazel_dep(name = "eve_agent_appliance", version = "0.1.0")
+bazel_dep(name = "platforms", version = "1.0.0")
 ```
 
 ```starlark
@@ -20,37 +21,56 @@ load(
     "agent_appliance",
     "appliance_oci_image",
     "capability_digest_evidence",
+    "cronjob_binding",
+    "deployment_binding",
     "exec_binding",
     "in_process_binding",
+    "job_binding",
+    "sidecar_binding",
+)
+
+platform(
+    name = "linux_amd64",
+    constraint_values = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
 )
 
 in_process_binding(
     name = "eve_binding",
     logical_name = "eve",
     target = ":eve_runtime",
+    target_platform = ":linux_amd64",
 )
 
 exec_binding(
     name = "price_normalizer_binding",
     logical_name = "price-normalizer",
     target = "//capabilities/price-normalizer",
+    target_platform = ":linux_amd64",
 )
 
 agent_appliance(
     name = "appliance",
     agent_name = "nova",
+    architecture = "amd64",
     manifest = "appliance/appliance.yaml",
     bindings = {
         "eve": ":eve_binding",
         "price-normalizer": ":price_normalizer_binding",
     },
+    os = "linux",
 )
 
 appliance_oci_image(
     name = "image",
     appliance = ":appliance",
+    architecture = "amd64",
     base = ":base_image",
+    os = "linux",
     runtime_layer = ":appliance_runtime_layer",
+    target_platform = ":linux_amd64",
     tars = [":application_layer"],
 )
 
@@ -63,7 +83,13 @@ capability_digest_evidence(
 The rule emits canonical manifest JSON, a trusted binding manifest, and a
 sanitized model-visible catalog. Typed binding wrappers require a real Bazel
 executable and collect its default runfiles, data runfiles, and repository
-mapping. `:appliance_runtime_layer` maps that complete closure to the fixed
+mapping, including logical symlink and root-symlink entries. All six closed
+invocation shapes have typed wrappers: `in_process`, `exec`, `sidecar`, `job`,
+`cronjob`, and `deployment`. Each wrapper transitions its executable closure to
+the required target platform. Image analysis rejects a target platform whose
+OS or CPU constraints disagree with the OCI metadata.
+
+`:appliance_runtime_layer` maps the complete closure to the fixed
 in-image paths. `appliance_oci_image` always adds this layer last, and
 `:capability_digest` derives the digest from the resulting OCI layout only after
 verifying every declared runtime file's bytes, mode, and ownership. Digest
@@ -82,7 +108,7 @@ acceptance corpus.
 ```bash
 bazel test //...
 bazel build //...
-cd test/consumer && bazel test //... && bazel build //...
+(cd test/consumer && bazel test //... && bazel build //... && bazel run //:consumer_image_load)
 ```
 
 GitHub Actions cache entries last accessed more than 24 hours ago are removed

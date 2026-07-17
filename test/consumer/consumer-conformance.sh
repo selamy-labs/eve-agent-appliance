@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
 root="${TEST_SRCDIR}/_main"
 if command -v sha256sum >/dev/null 2>&1; then
@@ -11,10 +11,12 @@ fi
 for artifact in binding catalog manifest; do
   actual="$(hash "${root}/consumer_appliance.${artifact}.json")"
   expected="$(cat "${root}/golden/${artifact}.sha256")"
-  [[ "${actual}" == "${expected}" ]]
+  test "${actual}" = "${expected}"
 done
 
 evidence="$(cat "${root}/consumer_digest_evidence.json")"
-[[ "${evidence}" =~ \"imageDigest\":\"sha256:[0-9a-f]{64}\" ]]
-[[ "${evidence}" == *'consumer.echo-tool.v1'* ]]
-[[ "${evidence}" != *'/opt/selamy/'* ]]
+printf '%s' "${evidence}" | grep -Eq '"imageDigest":"sha256:[0-9a-f]{64}"'
+printf '%s' "${evidence}" | grep -Fq 'consumer.echo-tool.v1'
+if printf '%s' "${evidence}" | grep -Fq '/opt/selamy/'; then
+  exit 1
+fi
