@@ -114,12 +114,12 @@ test("pins every third-party workflow action and scopes cleanup to this reposito
     const references = [...workflow.matchAll(/^\s*-\s+uses:\s+(\S+)/gm)].map(([, value]) => value);
     assert(references.length > 0);
     for (const reference of references) assert.match(reference, /@[0-9a-f]{40}$/);
-    assert.doesNotMatch(workflow, /^\s*runs-on:\s*speedforge(?:-large)?\s*$/gm);
+    assert.doesNotMatch(workflow, /^\s*runs-on:\s*speedforge(?:-[a-z0-9-]+)?\s*$/gm);
   }
   const cleanup = await readFile(new URL("../.github/workflows/actions-cache-24h.yaml", import.meta.url), "utf8");
   assert.match(cleanup, /github\.repository == 'selamy-labs\/eve-agent-appliance'/);
   assert.match(cleanup, /cron: "29 \* \* \* \*"/);
-  assert.match(cleanup, /runs-on: speedforge-public/);
+  assert.match(cleanup, /runs-on: ubuntu-24\.04/);
   const ci = await readFile(new URL("../.github/workflows/ci.yaml", import.meta.url), "utf8");
   assert.match(ci, /runs-on: ubuntu-24\.04/);
   assert.doesNotMatch(ci, /runs-on: speedforge/);
